@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Connect",
+  "NSCameraUsageDescription": "允许 Connect 扫描电脑上的配对二维码。",
+  "NSLocalNetworkUsageDescription": "允许 Connect 连接局域网或 Tailscale 私网内已配对的 Mac。",
+  "NSPhotoLibraryUsageDescription": "允许 Connect 选择你明确发送到协作房间的图片。",
+  "ios": {
+    "Localizable.strings": {
+      "Connect.NativeLanguage": "简体中文"
+    }
+  }
+}

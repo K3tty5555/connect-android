@@ -1,0 +1,26 @@
+// Android 出包的依赖镜像（PLAT-ANDROID-01）：出包机到 plugins.gradle.org / dl.google.com 的
+// 直连不稳定（2026-10-15 首跑即超时），经阿里云镜像解析 Gradle 插件与依赖；原仓库仍保留在
+// 镜像之后作回退。只由 scripts/package-android.sh 以 --init-script 注入，不改全局 Gradle 配置。
+beforeSettings { settings ->
+  settings.pluginManagement.repositories {
+    maven { url = uri('https://maven.aliyun.com/repository/gradle-plugin') }
+    maven { url = uri('https://maven.aliyun.com/repository/google') }
+    maven { url = uri('https://maven.aliyun.com/repository/public') }
+  }
+}
+
+// init 脚本对本次运行里的每个 build（含 node_modules 里的 included build）都会执行一次，
+// 因此 node_modules/@react-native/gradle-plugin 等自带 buildscript/google() 的项目也被盖住：
+// 2026-10-15 第二跑正是死在它们的 buildscript classpath 直连 dl.google.com。
+allprojects {
+  buildscript {
+    repositories {
+      maven { url = uri('https://maven.aliyun.com/repository/google') }
+      maven { url = uri('https://maven.aliyun.com/repository/public') }
+    }
+  }
+  repositories {
+    maven { url = uri('https://maven.aliyun.com/repository/google') }
+    maven { url = uri('https://maven.aliyun.com/repository/public') }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "connect-android",
+  "version": "1.0.4",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "package:android": "bash scripts/package-android.sh",
+    "mobile:assets": "node scripts/build-mobile-terminal.mjs && node scripts/build-mobile-room.mjs && node scripts/build-mobile-file-icons.mjs"
+  },
+  "devDependencies": {
+    "vite": "7.3.6",
+    "@vitejs/plugin-react": "5.2.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "@lobehub/ui": "5.20.3",
+    "@lobehub/icons": "5.13.0",
+    "antd": "6.5.1",
+    "@ant-design/v5-patch-for-react-19": "1.0.3",
+    "material-icon-theme": "5.36.1"
+  }
+}

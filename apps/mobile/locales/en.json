@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Connect",
+  "NSCameraUsageDescription": "Allow Connect to scan the pairing QR code shown on your Mac.",
+  "NSLocalNetworkUsageDescription": "Allow Connect to reach a paired Mac on your local or private Tailscale network.",
+  "NSPhotoLibraryUsageDescription": "Allow Connect to choose images you explicitly send to a collaboration room.",
+  "ios": {
+    "Localizable.strings": {
+      "Connect.NativeLanguage": "English"
+    }
+  }
+}

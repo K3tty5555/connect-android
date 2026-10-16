@@ -1,0 +1,57 @@
+import type { SessionViewModel } from '../domain/session';
+
+export const unpairedSession: SessionViewModel = {
+  deviceName: '尚未绑定电脑',
+  connection: 'unpaired',
+  ownership: 'desktop_owned',
+  ownershipAuthority: null,
+  agent: 'shell',
+  taskPhase: 'idle',
+  lines: [],
+  draft: '',
+  pendingIntent: null,
+  isDemo: false,
+  panels: [],
+  workspaces: [],
+  activePanelId: null,
+  ownershipEpoch: null,
+  panelExited: false,
+  canControlInput: false,
+  hasActivePanel: false,
+};
+
+export const demoRunningSession: SessionViewModel = {
+  deviceName: '中继',
+  connection: 'online',
+  ownership: 'mobile_owned',
+  ownershipAuthority: 'mobile_owned',
+  agent: 'codex',
+  taskPhase: 'running',
+  lines: [
+    { id: '1', text: '~/Projects/Connect $ npm test', tone: 'default' },
+    { id: '2', text: 'Running tests...', tone: 'agent' },
+    { id: '3', text: 'PASS tests/notifications.test.ts', tone: 'success' },
+    { id: '4', text: '42 / 126 tests completed', tone: 'agent' },
+    { id: '5', text: 'Waiting for 2 test files...', tone: 'default' },
+  ],
+  draft: '',
+  pendingIntent: null,
+  isDemo: true,
+  panels: [{
+    panelId: 'demo-codex',
+    kind: 'codex',
+    label: 'Codex · Connect',
+    workspaceCapability: 'wcap_demo0123456789abcdefghij',
+    workspaceLabel: 'Connect',
+  }],
+  workspaces: [{
+    workspaceCapability: 'wcap_demo0123456789abcdefghij',
+    label: 'Connect',
+    activeSurfaceCount: 1,
+  }],
+  activePanelId: 'demo-codex',
+  ownershipEpoch: 2,
+  panelExited: false,
+  canControlInput: true,
+  hasActivePanel: true,
+};

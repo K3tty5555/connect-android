@@ -1,0 +1,109 @@
+{
+  "expo": {
+    "name": "Connect",
+    "slug": "connect-mobile",
+    "version": "1.0.4",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
+    "locales": {
+      "zh-Hans": "./locales/zh-Hans.json",
+      "zh-Hant": "./locales/zh-Hant.json",
+      "en": "./locales/en.json"
+    },
+    "ios": {
+      "icon": "./assets/icon-ios.png",
+      "appleTeamId": "3489SSDHU2",
+      "bundleIdentifier": "app.connect.mobile.team3489ssdhu2",
+      "supportsTablet": true,
+      "privacyManifests": {
+        "NSPrivacyTracking": false,
+        "NSPrivacyTrackingDomains": [],
+        "NSPrivacyCollectedDataTypes": [],
+        "NSPrivacyAccessedAPITypes": []
+      },
+      "infoPlist": {
+        "UISupportedInterfaceOrientations~ipad": [
+          "UIInterfaceOrientationPortrait",
+          "UIInterfaceOrientationPortraitUpsideDown",
+          "UIInterfaceOrientationLandscapeLeft",
+          "UIInterfaceOrientationLandscapeRight"
+        ],
+        "NSCameraUsageDescription": "允许 Connect 扫描电脑上的配对二维码。",
+        "NSLocalNetworkUsageDescription": "允许 Connect 连接局域网或 Tailscale 私网内已配对的 Mac。"
+      }
+    },
+    "android": {
+      "package": "app.connect.mobile",
+      "softwareKeyboardLayoutMode": "resize",
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#16181d"
+      },
+      "versionCode": 1,
+      "allowBackup": false
+    },
+    "plugins": [
+      "./plugins/withStorefrontLocalizations",
+      "./plugins/withSourceBuiltExpoModules",
+      "./plugins/withAndroidReleaseBuild",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": false,
+          "faceIDPermission": false
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "允许 Connect 扫描电脑上的配对二维码。",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "允许 Connect 选择你明确发送到协作房间的图片。",
+          "microphonePermission": false
+        }
+      ],
+      "expo-localization",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "enableSceneSupport": true
+          },
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/JetBrainsMono/JetBrainsMono-Regular.ttf",
+            "./assets/fonts/JetBrainsMono/JetBrainsMono-Bold.ttf",
+            "./assets/fonts/JetBrainsMono/JetBrainsMono-Italic.ttf",
+            "./assets/fonts/JetBrainsMono/JetBrainsMono-BoldItalic.ttf"
+          ],
+          "android": {
+            "fonts": [
+              "./assets/fonts/DejaVuSansMono/DejaVuSansMono.ttf",
+              "./assets/fonts/DejaVuSansMono/DejaVuSansMono-Bold.ttf",
+              "./assets/fonts/NotoSansSymbols/NotoSansSymbols2-TerminalSubset.ttf",
+              "./assets/fonts/NotoSansSymbols/NotoSansSymbols-TerminalSubset.ttf"
+            ]
+          }
+        }
+      ]
+    ]
+  }
+}

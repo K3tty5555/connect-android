@@ -1,0 +1,119 @@
+:root {
+  color-scheme: dark;
+  --terminal-background: #1c1f25;
+  --terminal-foreground: #e6e8ec;
+  background: var(--terminal-background);
+}
+
+html,
+body,
+#terminal {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--terminal-background);
+}
+
+#terminal-watch {
+  display: none;
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 10px 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--terminal-background);
+  color: var(--terminal-foreground);
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: normal;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+#terminal-canvas-scroll {
+  display: none;
+  position: absolute;
+  inset: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+#terminal-canvas-spacer {
+  position: relative;
+  min-height: 100%;
+}
+
+#terminal-canvas {
+  display: block;
+  position: sticky;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body.watch-mode #terminal .xterm {
+  display: none;
+}
+
+body.watch-mode #terminal-watch {
+  display: block;
+}
+
+body.watch-mode.canvas-renderer #terminal-watch {
+  display: none;
+}
+
+body.watch-mode.canvas-renderer #terminal-canvas-scroll {
+  display: block;
+}
+
+body {
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+.xterm {
+  height: 100%;
+  padding: 0;
+  box-sizing: border-box;
+  touch-action: none;
+}
+
+.xterm,
+.xterm .xterm-viewport {
+  background-color: var(--terminal-background);
+}
+
+#terminal-watch,
+#terminal-canvas-scroll,
+.xterm .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: #858d99 transparent;
+}
+
+#terminal-watch::-webkit-scrollbar,
+#terminal-canvas-scroll::-webkit-scrollbar,
+.xterm .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+#terminal-watch::-webkit-scrollbar-track,
+#terminal-canvas-scroll::-webkit-scrollbar-track,
+.xterm .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#terminal-watch::-webkit-scrollbar-thumb,
+#terminal-canvas-scroll::-webkit-scrollbar-thumb,
+.xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: #858d99;
+}

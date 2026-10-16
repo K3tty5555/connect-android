@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "decidedAt": "2026-10-03",
+  "note": "正式身份唯一来源。上架后不可改：iOS Bundle ID 一旦有 App 记录即永久绑定（用户 2026-10-03 拍板）。Team ID 为付费个人账号，与原 Personal Team 相同（入会时原账号升级）。 iPhone 桌面显示名「Connect」已被他人占用（ITMS-90129），上架版用「Connect IDE」（用户 2026-10-04 拍板），本地自用版仍为 Connect。",
+  "appleTeamId": "3489SSDHU2",
+  "ios": {
+    "appStoreBundleId": "io.github.k3tty5555.connect",
+    "appStoreAppleId": "6818992264",
+    "appStoreDisplayName": "Connect IDE"
+  },
+  "mac": {
+    "bundleId": "app.connect.desktop"
+  }
+}

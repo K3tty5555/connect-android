@@ -1,0 +1,222 @@
+:root {
+  color-scheme: dark;
+  --connect-bg: #16181d;
+  --connect-panel: #1c1f25;
+  --connect-panel-2: #22262e;
+  --connect-line: #2c313b;
+  --connect-text: #e6e8ec;
+  --connect-text-2: #a2a9b4;
+  --connect-text-3: #858d99;
+  --connect-bubble-mine: #3eb575;
+  --connect-bubble-mine-text: #08140c;
+  --connect-bubble-agent: #22262e;
+  --connect-system-bg: #22262e;
+  --connect-claude: #d9785a;
+  --connect-codex: #3ba79e;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --connect-bg: #f4f5f7;
+  --connect-panel: #ffffff;
+  --connect-panel-2: #eef0f3;
+  --connect-line: #e2e5ea;
+  --connect-text: #23272e;
+  --connect-text-2: #545c68;
+  --connect-text-3: #626a75;
+  --connect-bubble-mine: #95ec69;
+  --connect-bubble-mine-text: #111f12;
+  --connect-bubble-agent: #ffffff;
+  --connect-system-bg: #e7e9ed;
+  --connect-claude: #c25f3e;
+  --connect-codex: #23847c;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+  background: var(--connect-bg);
+}
+
+body {
+  overflow-x: hidden;
+  color: var(--connect-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.room-root {
+  min-height: 100vh;
+  padding: 8px 8px 20px;
+}
+
+.omitted,
+.empty {
+  padding: 12px;
+  color: var(--connect-text-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+.empty {
+  padding-top: 32px;
+  font-size: 14px;
+}
+
+/* App Store screenshots only: vendor avatars replaced by an identity-colour dot. */
+.agent-dot {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-dot::before {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--agent-dot);
+  content: '';
+}
+
+.agent-dot-claude { --agent-dot: var(--connect-claude); }
+.agent-dot-codex { --agent-dot: var(--connect-codex); }
+
+.text-avatar {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--connect-line);
+  border-radius: 6px;
+  background: var(--connect-panel-2);
+  color: var(--connect-text-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-avatar {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.chat-message {
+  padding-block: 10px 8px !important;
+  padding-inline: 4px !important;
+}
+
+/* Agent rows carry a one-line title above the bubble. The avatar drops by
+   that title's height so it lines up with the bubble, as the user's does. */
+.chat-message-claude > :first-child,
+.chat-message-codex > :first-child {
+  margin-top: 6px !important;
+}
+
+.chat-message-claude > :nth-child(2) > :first-child,
+.chat-message-codex > :nth-child(2) > :first-child {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.agent-title-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-message-claude time,
+.chat-message-codex time {
+  flex: none;
+}
+
+.chat-message-user div:has(> .message-user) {
+  border-color: transparent !important;
+  background: var(--connect-bubble-mine) !important;
+  color: var(--connect-bubble-mine-text) !important;
+}
+
+.chat-message-claude div:has(> .message-claude),
+.chat-message-codex div:has(> .message-codex) {
+  border-color: var(--connect-line) !important;
+  background: var(--connect-bubble-agent) !important;
+}
+
+.message-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.system-message {
+  display: flex;
+  justify-content: center;
+  padding: 8px 40px;
+  color: var(--connect-text-3);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.system-message span {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--connect-system-bg);
+}
+
+.message-status {
+  margin-top: 6px;
+  color: var(--connect-text-3);
+  font-size: 12px;
+}
+
+.message-images {
+  display: flex;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.message-image {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 5px 10px;
+  border: 1px solid var(--connect-line);
+  border-radius: 6px;
+  background: var(--connect-panel-2);
+  color: var(--connect-text-2);
+  font: inherit;
+  font-size: 12px;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--connect-text-3) 55%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

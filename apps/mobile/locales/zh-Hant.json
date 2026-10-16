@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Connect",
+  "NSCameraUsageDescription": "允許 Connect 掃描電腦上的配對 QR 碼。",
+  "NSLocalNetworkUsageDescription": "允許 Connect 連接區域網絡或 Tailscale 私人網絡內已配對的 Mac。",
+  "NSPhotoLibraryUsageDescription": "允許 Connect 選擇你明確發送到協作房間的圖片。",
+  "ios": {
+    "Localizable.strings": {
+      "Connect.NativeLanguage": "繁體中文"
+    }
+  }
+}
