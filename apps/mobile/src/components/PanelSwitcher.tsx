@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { MobilePanelStatus } from '../../../../src/shared/types';
+import { PanelStatusLamp, lampTone, panelStatusLabel } from './PanelStatusLamp';
 import {
   Animated,
   Easing,
@@ -55,6 +57,8 @@ import {
 } from './StableMotionList';
 
 export interface PanelSwitcherProps {
+  /** The desktop's lamp per panel (MOBILE-SESSION-RUN-STATE-01); absent where not offered. */
+  panelStatuses?: Readonly<Record<string, MobilePanelStatus>>;
   panels: readonly SessionPanelSummary[];
   workspaces?: readonly SessionWorkspaceSummary[];
   activePanelId: string | null;
@@ -170,6 +174,8 @@ export function panelSwitcherRows(
   return rows;
 }
 
+const NO_PANEL_STATUSES: Readonly<Record<string, MobilePanelStatus>> = {};
+
 export function PanelSwitcher({
   panels,
   workspaces = [],
@@ -201,6 +207,7 @@ export function PanelSwitcher({
   canControlInput = false,
   onOwnershipIntent = () => {},
   onOwnershipReconcile,
+  panelStatuses = NO_PANEL_STATUSES,
 }: PanelSwitcherProps): React.ReactElement {
   const sheetRef = useRef<BottomSheetModal>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -221,6 +228,7 @@ export function PanelSwitcher({
     ?? null;
   const activeLabel = activePanel ? panelDisplayLabel(activePanel) : t('会话');
   const activeKind = activePanel?.kind ?? 'shell';
+  const activeStatus = activePanel ? panelStatuses[activePanel.panelId] : undefined;
   const groupedRows = panelSwitcherRows(visualPanels, workspaces);
   const groupedKeys = groupedRows.map((row) => row.key);
   const groupedKeySignature = JSON.stringify(groupedKeys);
@@ -363,15 +371,15 @@ export function PanelSwitcher({
         <View style={styles.selectorCopy}>
           <Text maxFontSizeMultiplier={MAX_COMPACT_FONT_SCALE} numberOfLines={1} style={styles.activeLabel}>{activeLabel}</Text>
           <View style={styles.detailRow}>
-            <View
-              style={[
-                styles.statusDot,
-                connection === 'online' ? styles.statusDotOnline : null,
-                connection === 'confirming' || connection === 'reconnecting'
-                  ? styles.statusDotReconnecting
-                  : null,
-              ]}
-            />
+            {connection === 'online' && activeStatus !== undefined ? (
+              <PanelStatusLamp
+                label={panelStatusLabel(activeStatus)}
+                size={6}
+                testID="active-session-status"
+                theme={theme}
+                tone={lampTone(activeStatus)}
+              />
+            ) : null}
             <Text maxFontSizeMultiplier={MAX_COMPACT_FONT_SCALE} style={styles.connection}>{t(CONNECTION_LABELS[connection])}</Text>
             {ownershipLabel ? (
               <>
@@ -530,6 +538,14 @@ export function PanelSwitcher({
                     <View style={styles.panelCopy}>
                       <Text numberOfLines={1} style={styles.panelLabel}>{panelDisplayLabel(panel)}</Text>
                     </View>
+                    {connection === 'online' && panelStatuses[panel.panelId] !== undefined ? (
+                      <PanelStatusLamp
+                        label={panelStatusLabel(panelStatuses[panel.panelId]!)}
+                        testID={`switcher-status-${panel.panelId}`}
+                        theme={theme}
+                        tone={lampTone(panelStatuses[panel.panelId]!)}
+                      />
+                    ) : null}
                     {/*
                       这里原本有一个选中态对勾。现网反馈「关闭左边的对勾按钮没有实际
                       意义」——它确实没有：`SelectionIndicator` 只是个动画透明度容器，
@@ -621,15 +637,6 @@ function createStyles(theme: ConnectTheme) {
       alignItems: 'center',
       gap: SPACE.x1,
     },
-    statusDot: {
-      width: 6,
-      height: 6,
-      flex: 0,
-      borderRadius: RADIUS.pill,
-      backgroundColor: theme.colors.text3,
-    },
-    statusDotOnline: { backgroundColor: theme.colors.ok },
-    statusDotReconnecting: { backgroundColor: theme.colors.warn },
     connection: {
       flex: 0,
       color: theme.colors.text3,

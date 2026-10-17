@@ -812,7 +812,17 @@ export interface TerminalShortcutBindings {
   eof: TerminalShortcutKey;
   cancel: TerminalShortcutKey;
 }
-export type MobileServerCapability = 'terminal-grid-v1' | 'workspace-files-v1' | 'workspace-office-preview-v1';
+export type MobileServerCapability =
+  | 'terminal-grid-v1'
+  | 'workspace-files-v1'
+  | 'workspace-office-preview-v1'
+  | 'panel-states-v1';
+/** Desktop lamp per panel (MOBILE-SESSION-RUN-STATE-01): red = needs_input/error/unread, yellow = running, green = idle. */
+export type MobilePanelStatus = 'needs_input' | 'error' | 'unread' | 'running' | 'idle';
+export interface MobilePanelState {
+  panelId: string;
+  status: MobilePanelStatus;
+}
 export const MOBILE_CAPABILITY_PROBE_REQUEST_ID = 'req_capability_probe_v1';
 /**
  * 第二代探针：回复完整能力表。v1 探针的回复永远只含 terminal-grid-v1——已发布的手机按精确
@@ -889,6 +899,8 @@ export type MobileCommand =
   | { kind: 'listRooms'; requestId?: string }
   | { kind: 'listNotifications'; requestId: string }
   | { kind: 'markNotificationsRead'; requestId: string; cursor: number }
+  | { kind: 'watchPanelStates'; requestId: string }
+  | { kind: 'markPanelRead'; requestId: string; panelId: string }
   | { kind: 'getCollaborationProfile'; requestId: string; workspaceCapability: string }
   | {
       kind: 'setCollaborationAvatar';
@@ -1013,6 +1025,7 @@ export type MobileEvent =
       workspaces: MobileWorkspaceSummary[];
     }
   | { kind: 'panelList'; requestId?: string; panels: MobilePanelSummary[] }
+  | { kind: 'panelStates'; requestId?: string; panels: MobilePanelState[] }
   | { kind: 'roomList'; requestId?: string; rooms: MobileRoomSummary[] }
   | {
       kind: 'notificationList';

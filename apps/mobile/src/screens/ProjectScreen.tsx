@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import type { MobilePanelStatus } from '../../../../src/shared/types';
+import { PanelStatusLamp, lampTone, panelStatusLabel } from '../components/PanelStatusLamp';
 import { FlatList, Modal, StyleSheet, Text, View } from 'react-native';
 import { ChevronLeft, Plus } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -40,6 +42,8 @@ export type ProjectSection = 'sessions' | 'files';
 /** 回到同一项目时停在上次的分段；按 label 记，重连轮换 capability 后仍对得上。 */
 const lastSectionByWorkspace = new Map<string, ProjectSection>();
 
+const NO_PANEL_STATUSES: Readonly<Record<string, MobilePanelStatus>> = {};
+
 export function ProjectScreen({
   state,
   presentedConnection = state.connection,
@@ -59,7 +63,10 @@ export function ProjectScreen({
   filesSupported = false,
   filesNeedDesktopUpdate = false,
   initialSection,
+  panelStatuses = NO_PANEL_STATUSES,
 }: {
+  /** The desktop's lamp per panel; absent where the desktop does not offer it. */
+  panelStatuses?: Readonly<Record<string, MobilePanelStatus>>;
   state: SessionViewModel;
   presentedConnection?: ConnectionState;
   theme: ConnectTheme;
@@ -256,6 +263,14 @@ export function ProjectScreen({
                     <Text numberOfLines={1} style={styles.sessionLabel}>{panelDisplayLabel(item)}</Text>
                     <Text style={styles.sessionDetail}>{item.kind === 'collaboration' ? t('协作会话') : t('终端会话')}</Text>
                   </View>
+                  {panelStatuses[item.panelId] !== undefined ? (
+                    <PanelStatusLamp
+                      label={panelStatusLabel(panelStatuses[item.panelId]!)}
+                      testID={`session-status-${item.panelId}`}
+                      theme={theme}
+                      tone={lampTone(panelStatuses[item.panelId]!)}
+                    />
+                  ) : null}
                   <SelectionIndicator
                     reducedMotion={reducedMotion}
                     selected={selected}

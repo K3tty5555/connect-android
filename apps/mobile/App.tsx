@@ -110,6 +110,7 @@ import {
   type MobilePreferencesPatch,
 } from './src/settings/preferencesStore';
 import type {
+  MobilePanelStatus,
   MobilePreferences,
   TerminalGridFrame,
 } from '../../src/shared/types';
@@ -119,7 +120,13 @@ import {
   type MobilePerformanceOperation,
 } from './src/performance/mobilePerformanceTrace';
 import { createExpoMobilePerformanceStore } from './src/performance/expoMobilePerformanceStore';
-import type { TerminalWebViewHandle } from './src/terminal/TerminalWebView';
+import type { TerminalStreamHandle } from './src/terminal/terminalStreamHandle';
+import { shouldMarkPanelRead } from './src/domain/panelRead';
+import {
+  TERMINAL_OPENING_SETTLE_MS,
+  expectsPhoneGeometry,
+  terminalOpeningSettled,
+} from './src/terminal/terminalOpeningSettle';
 import { TerminalGeometryGuard } from './src/terminal/terminalGeometryGuard';
 import { TerminalTranscriptCache } from './src/terminal/terminalTranscriptCache';
 import { TerminalRecoveryCoordinator } from './src/terminal/terminalRecoveryCoordinator';
@@ -184,7 +191,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { pickCollaborationAvatar } from './src/domain/collaborationAvatarPicker';
 import { operationPresentation, type OperationPhase } from './src/domain/operationPresentation';
 import { createPtyGeometryHandover } from './src/terminal/terminalGeometryHandover';
-import { swiftTermAvailable } from './src/terminal/SwiftTermTerminalView';
 import {
   LastScreenStore,
   desktopKeyOf,
@@ -226,12 +232,6 @@ const NATIVE_GRID_DEMO = process.env.EXPO_PUBLIC_CONNECT_NATIVE_GRID_DEMO === '1
 const NATIVE_GRID_DEMO_ROUTE = NATIVE_GRID_DEMO
   ? NativeSettings.get('ConnectNativeGridRoute')
   : null;
-const NATIVE_GRID_DEMO_VIEW = NATIVE_GRID_DEMO
-  && NativeSettings.get('ConnectTerminalView') === 'exact-grid-view'
-  ? 'exact-grid-view' as const
-  : NATIVE_GRID_DEMO && NativeSettings.get('ConnectTerminalView') === 'swiftterm-view'
-    ? 'swiftterm-view' as const
-    : 'reflow-view' as const;
 // seq-* 夹具按真实桥的到达顺序分两帧：先只有视口，随后带长历史（MOBILE-CHAT-NOT-AT-LATEST-1012）。
 const NATIVE_GRID_DEMO_SEQUENCE = NATIVE_GRID_DEMO
   ? swiftTermSequenceFixture(String(NativeSettings.get('ConnectNativeGridFixture') ?? ''))
@@ -259,14 +259,6 @@ const PTY_GEOMETRY_SETTLE_MS = 300;
 /** How often a terminal on screen refreshes its saved last screen. */
 const LAST_SCREEN_SAVE_INTERVAL_MS = 15_000;
 
-/**
- * Only the WebView renders the raw PTY stream. SwiftTerm draws the grid frames
- * too (dev-log 350): they carry the history Connect records for full-screen
- * apps, which a byte stream cannot.
- */
-function terminalViewUsesByteStream(view: MobilePreferences['terminalView']): boolean {
-  return view === 'webview';
-}
 const OWNERSHIP_CONFIRM_TIMEOUT_MS = 8_000;
 const REFRESH_CONFIRM_TIMEOUT_MS = 10_000;
 type RefreshPart = 'workspaces' | 'panels' | 'rooms';
@@ -314,11 +306,16 @@ export default function App(): React.ReactElement {
   ));
   const route = navigation.route;
   const [catalogReady, setCatalogReady] = useState(STORE_SHOT !== null);
+  /**
+   * The desktop's lamp per panel (MOBILE-SESSION-RUN-STATE-01). Empty until a
+   * desktop that offers it answers, and cleared off-line: an old colour must
+   * not pass for the current one.
+   */
+  const [panelStatuses, setPanelStatuses] = useState<Readonly<Record<string, MobilePanelStatus>>>({});
   const [resumeTarget, setResumeTarget] = useState<MobileResumeTarget | null>(null);
   const [resumeLoaded, setResumeLoaded] = useState(false);
   const [preferences, setPreferences] = useState<MobilePreferences>({
     ...DEFAULT_MOBILE_PREFERENCES,
-    terminalView: STORE_SHOT?.terminalView ?? NATIVE_GRID_DEMO_VIEW,
     notifications: { ...DEFAULT_MOBILE_PREFERENCES.notifications },
   });
   const preferencesRef = useRef(preferences);
@@ -329,19 +326,13 @@ export default function App(): React.ReactElement {
   const [terminalRendererFallback, setTerminalRendererFallback] = useState(false);
   const [terminalRendererRetryPending, setTerminalRendererRetryPending] = useState(false);
   const terminalRendererRetryGenerationRef = useRef(0);
-  const configuredTerminalView = preferences.terminalView;
-  // Only the WebView parses the raw PTY stream; SwiftTerm draws grid frames.
-  const configuredTerminalRenderer = terminalViewUsesByteStream(configuredTerminalView)
-    ? 'legacy-webview' as const
-    : 'native-grid' as const;
-  // SwiftTerm renders through a native module an older or non-iOS binary does
-  // not carry; there it falls back to the Reflow View on the same grid frames,
-  // and everything downstream must see the view it really is.
-  const effectiveTerminalView = terminalRendererFallback
-    ? 'webview' as const
-    : configuredTerminalView === 'swiftterm-view' && !swiftTermAvailable
-      ? 'reflow-view' as const
-      : configuredTerminalView;
+  // The phone draws terminals only with the native view — SwiftTerm on iOS,
+  // Termux on Android (user decision 2026-10-17, MOBILE-NATIVE-RENDERER-ONLY-01).
+  // The stored `terminalView` preference is kept for data compatibility only.
+  // Grid frames are the normal transport; the byte stream is the compatibility
+  // fallback, and the same native view draws it.
+  const configuredTerminalRenderer = 'native-grid' as const;
+  const effectiveTerminalView = 'swiftterm-view' as const;
   const effectiveTerminalRenderer = terminalRendererRetryPending
     ? 'native-grid' as const
     : terminalRendererFallback
@@ -530,7 +521,7 @@ export default function App(): React.ReactElement {
     timer: ReturnType<typeof setTimeout>;
   } | null>(null);
   const carryControlTargetRef = useRef<string | null>(null);
-  const terminalRef = useRef<TerminalWebViewHandle>(null);
+  const terminalRef = useRef<TerminalStreamHandle>(null);
   const terminalSwapRef = useRef<TerminalSwapCoordinator | null>(null);
   terminalSwapRef.current ??= new TerminalSwapCoordinator();
   const terminalSwap = terminalSwapRef.current;
@@ -613,8 +604,8 @@ export default function App(): React.ReactElement {
   };
   const presentPreparedTerminalFrame = (
     panelId: string,
-    fallbackSegments: Parameters<TerminalWebViewHandle['replace']>[0] = [],
-    fallbackRestore: Parameters<TerminalWebViewHandle['replace']>[1] = {},
+    fallbackSegments: Parameters<TerminalStreamHandle['replace']>[0] = [],
+    fallbackRestore: Parameters<TerminalStreamHandle['replace']>[1] = {},
   ): boolean => {
     const terminal = terminalRef.current;
     if (terminal === null) return false;
@@ -1539,6 +1530,9 @@ export default function App(): React.ReactElement {
             if (created !== null && event.requestId === created.requestId) {
               resolveCreatedTerminalFromCatalog(created, visiblePanels);
             }
+          } else if (event.kind === 'panelStates') {
+            // The desktop sends the whole set each time: replace, never merge.
+            setPanelStatuses(Object.fromEntries(event.panels.map((panel) => [panel.panelId, panel.status])));
           } else if (event.kind === 'roomList') {
             acceptRefreshPart(event.requestId, 'rooms');
             const rooms: SessionPanelSummary[] = event.rooms.map((room) => ({
@@ -2071,7 +2065,7 @@ export default function App(): React.ReactElement {
         },
         onTerminalRendererResolved: ({ effective, reason }) => {
           terminalRendererRef.current = effective;
-          if (reason === 'unsupported' && !terminalViewUsesByteStream(preferencesRef.current.terminalView)) {
+          if (reason === 'unsupported') {
             setTerminalRendererRetryPending(false);
             setTerminalRendererFallback(true);
           }
@@ -2403,10 +2397,8 @@ export default function App(): React.ReactElement {
     terminalSwap.reset();
     syncTerminalSwapStatus();
     setNativeGridPresentation(null);
-    if (configuredTerminalRenderer === 'native-grid') {
-      terminalGridStore.clear();
-    }
-  }, [configuredTerminalRenderer, terminalGridStore, terminalSwap]);
+    terminalGridStore.clear();
+  }, [terminalGridStore, terminalSwap]);
 
   useEffect(() => {
     if (
@@ -2891,6 +2883,25 @@ export default function App(): React.ReactElement {
     });
     return () => subscription.remove();
   }, [lastScreenStore]);
+  useEffect(() => {
+    if (state.connection !== 'online') setPanelStatuses({});
+  }, [state.connection]);
+  // Seeing a finished panel here is seeing it on the desktop too (user 2026-10-17):
+  // a new result on the panel in front of the user is marked read at once.
+  const activePanelStatus = state.activePanelId === null ? undefined : panelStatuses[state.activePanelId];
+  useEffect(() => {
+    const current = bridge.current;
+    const panelId = state.activePanelId;
+    if (current === null || panelId === null || !shouldMarkPanelRead({
+      onSessionRoute: route.kind === 'session',
+      appActive,
+      connection: state.connection,
+      activePanelId: panelId,
+      status: activePanelStatus,
+      desktopSupportsPanelStates: current.supportsPanelStates,
+    })) return;
+    void current.send({ kind: 'markPanelRead', requestId: createMobileRequestId(), panelId }).catch(() => undefined);
+  }, [activePanelStatus, appActive, route.kind, state.activePanelId, state.connection]);
   const [autoTakeoverArm, setAutoTakeoverArm] = useState<string | null>(null);
   useEffect(() => {
     setAutoTakeoverArm(route.kind === 'session' ? state.activePanelId : null);
@@ -3002,8 +3013,10 @@ export default function App(): React.ReactElement {
       await bridge.current?.resize(panelId, geometry.cols, geometry.rows);
     },
   }));
+  const [phoneViewportCols, setPhoneViewportCols] = useState<number | null>(null);
   const reportTerminalViewport = useCallback((cols: number, rows: number, transient?: boolean): void => {
     ptyGeometry.report({ cols, rows }, transient);
+    if (!transient) setPhoneViewportCols(cols);
   }, [ptyGeometry]);
   useEffect(() => {
     if (state.ownership === 'mobile_owned') ptyGeometry.settle();
@@ -3016,6 +3029,74 @@ export default function App(): React.ReactElement {
     state.ownershipEpoch,
   ]);
   ptyGeometryRef.current = ptyGeometry;
+
+  // One opening = this terminal, this foreground, this connection. Until the
+  // phone-width frames land, the desktop-width ones stay hidden behind the last
+  // screen or a loading state (MOBILE-NATIVE-RENDERER-ONLY-01, user 2026-10-17).
+  const onlineGenerationRef = useRef({ connection: state.connection, generation: 0 });
+  if (onlineGenerationRef.current.connection !== state.connection) {
+    onlineGenerationRef.current = {
+      connection: state.connection,
+      generation: onlineGenerationRef.current.generation + (state.connection === 'online' ? 1 : 0),
+    };
+  }
+  const openingKey = route.kind === 'session' && state.activePanelId !== null
+    ? `${state.activePanelId}:${foregroundGeneration}:${onlineGenerationRef.current.generation}`
+    : null;
+  const [openingReveal, setOpeningReveal] = useState<{ key: string | null; firstFrameAt: number | null; revealed: boolean }>(
+    { key: null, firstFrameAt: null, revealed: false },
+  );
+  const opening = openingReveal.key === openingKey
+    ? openingReveal
+    : { key: openingKey, firstFrameAt: null, revealed: false };
+  const liveFrameCols = nativeGridPresentation?.frame.panelId === state.activePanelId
+    ? nativeGridPresentation.frame.cols
+    : null;
+  const activeTerminalPanel = state.panels.find((panel) => panel.panelId === state.activePanelId);
+  const openingExpectsPhoneGeometry = expectsPhoneGeometry({
+    connection: state.connection,
+    isTerminal: activeTerminalPanel !== undefined && activeTerminalPanel.kind !== 'collaboration',
+    isDemo: state.isDemo,
+    byteStream: terminalRendererFallback,
+    ownership: state.ownership,
+    ownershipKnown: state.ownershipEpoch !== null,
+    canControlInput: state.canControlInput,
+    followsPhone: preferences.takeoverFollowsPhone !== false,
+    autoTakeover: preferencesReady && preferences.autoTakeover !== false,
+  });
+  const [openingClock, setOpeningClock] = useState(0);
+  const openingSettledNow = liveFrameCols !== null && opening.firstFrameAt !== null && terminalOpeningSettled({
+    expectsPhoneGeometry: openingExpectsPhoneGeometry,
+    phoneCols: phoneViewportCols,
+    frameCols: liveFrameCols,
+    sinceFirstFrameMs: Date.now() - opening.firstFrameAt,
+  });
+  const terminalSettling = openingKey !== null && liveFrameCols !== null && !opening.revealed && !openingSettledNow;
+  const terminalSettlingRef = useRef(terminalSettling);
+  terminalSettlingRef.current = terminalSettling;
+  const retireLastScreenOnRevealRef = useRef(false);
+  useEffect(() => {
+    if (openingKey === null || liveFrameCols === null) return;
+    if (opening.firstFrameAt === null) {
+      setOpeningReveal({ key: openingKey, firstFrameAt: Date.now(), revealed: false });
+      return;
+    }
+    if (opening.revealed) return;
+    if (openingSettledNow) {
+      setOpeningReveal({ ...opening, revealed: true });
+      if (retireLastScreenOnRevealRef.current) {
+        retireLastScreenOnRevealRef.current = false;
+        setLastScreenRetired(true);
+      }
+      return;
+    }
+    // Re-evaluate when the settle window closes, even if no frame arrives.
+    const timer = setTimeout(
+      () => setOpeningClock((tick) => tick + 1),
+      Math.max(0, opening.firstFrameAt + TERMINAL_OPENING_SETTLE_MS - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [liveFrameCols, opening, openingClock, openingKey, openingSettledNow]);
   useEffect(() => {
     const show = KeyboardEvents.addListener('keyboardWillShow', () => ptyGeometry.keyboard(true));
     const hide = KeyboardEvents.addListener('keyboardWillHide', () => ptyGeometry.keyboard(false));
@@ -3604,8 +3685,7 @@ export default function App(): React.ReactElement {
     const panelId = stateRef.current.activePanelId;
     const currentBridge = bridge.current;
     if (
-      configuredTerminalRenderer !== 'native-grid'
-      || panelId === null
+      panelId === null
       || currentBridge === null
       || stateRef.current.connection !== 'online'
       || terminalRendererRetryPending
@@ -3702,7 +3782,6 @@ export default function App(): React.ReactElement {
                 setLastScreenRetired(true);
               }}
               screen={resumePreview}
-              terminalView={effectiveTerminalView}
               theme={theme}
             />
           ) : route.tab === 'home' ? (
@@ -3710,6 +3789,7 @@ export default function App(): React.ReactElement {
               <TabletEmptyState theme={theme} title={t('选择一个会话，或在左侧打开文件')} />
             ) : (
               <HomeScreen
+                panelStatuses={panelStatuses}
                 state={state}
                 presentedConnection={presentedConnection}
                 connectionDetail={bridgeError}
@@ -3763,6 +3843,7 @@ export default function App(): React.ReactElement {
           />
         ) : (
           <ProjectScreen
+            panelStatuses={panelStatuses}
             state={state}
             presentedConnection={presentedConnection}
             theme={theme}
@@ -3787,6 +3868,7 @@ export default function App(): React.ReactElement {
         )
       ) : route.kind === 'session' ? (
         <SessionScreen
+          panelStatuses={panelStatuses}
           state={sessionState}
           presentedConnection={presentedConnection}
           theme={theme}
@@ -3798,9 +3880,9 @@ export default function App(): React.ReactElement {
         composerSendStatus={composerSendStatus}
         refreshStatus={refreshStatus}
         terminalSwapStatus={terminalSwapStatus}
-        terminalView={effectiveTerminalView}
         terminalFont={preferences.terminalFont ?? 'menlo'}
         lastScreen={sessionLastScreenValue}
+        terminalSettling={terminalSettling}
         terminalProbe={NATIVE_GRID_DEMO}
         terminalShortcuts={preferences.terminalShortcuts}
         terminalQueueDepth={terminalQueueDepth}
@@ -3844,8 +3926,10 @@ export default function App(): React.ReactElement {
         onTerminalRendererRetry={retryNativeTerminal}
         onTerminalPaint={(operationId) => {
           if (terminalSwap.painted(operationId) !== null) {
-            // A live frame is on screen: the saved one has done its job.
-            setLastScreenRetired(true);
+            // A live frame is on screen: the saved one has done its job — once
+            // the opening settles; until then it is what the user sees.
+            if (terminalSettlingRef.current) retireLastScreenOnRevealRef.current = true;
+            else setLastScreenRetired(true);
             saveLastScreenRef.current();
             const panelId = terminalSwap.snapshot().presentedPanelId;
             const latest = panelId === null ? null : terminalTranscripts.snapshot(panelId);
@@ -3978,6 +4062,7 @@ export default function App(): React.ReactElement {
       />
       ) : (
         <HomeScreen
+          panelStatuses={panelStatuses}
           state={state}
           presentedConnection={presentedConnection}
           theme={theme}
@@ -4011,6 +4096,7 @@ export default function App(): React.ReactElement {
                   <View style={styles.tabletRoot}>
                     {tabletSidebarVisible ? (
                       <TabletSidebar
+                        panelStatuses={panelStatuses}
                         activeFileSubPath={tabletActiveFile?.subPath ?? null}
                         activePanelId={route.kind === 'session' ? route.panelId : null}
                         currentWorkspace={tabletWorkspace}
@@ -4050,6 +4136,8 @@ export default function App(): React.ReactElement {
                     <View style={styles.tabletMain}>
                       <SafeAreaView edges={['top', 'right']} style={{ backgroundColor: theme.colors.panel }}>
                         <TabletTabStrip
+                          panelStatuses={panelStatuses}
+                          online={state.connection === 'online'}
                           activeFileKey={tabletActiveFileKey}
                           activePanelId={route.kind === 'session' ? route.panelId : null}
                           canCreate={tabletCanCreate && tabletWorkspace !== null}

@@ -9,11 +9,8 @@ import {
 import { StyleSheet, View } from 'react-native';
 import type { AgentKind } from '../domain/session';
 import type { ConnectTheme } from '../theme/theme';
-import {
-  TerminalWebView,
-  type TerminalRestoreState,
-  type TerminalWebViewHandle,
-} from './TerminalWebView';
+import type { TerminalRestoreState, TerminalStreamHandle } from './terminalStreamHandle';
+import { NativeTerminalUnavailable } from './NativeTerminalUnavailable';
 import type { TerminalSegment } from './terminalSegments';
 import {
   SwiftTermTerminalView,
@@ -38,8 +35,6 @@ interface PendingReplacement {
 
 export interface TerminalSwapViewProps {
   agent: AgentKind;
-  /** Which view renders the byte stream; SwiftTerm falls back to the WebView where absent. */
-  renderer?: 'webview' | 'swiftterm';
   fontFamily?: TerminalFontPreference;
   /** Wheel notches from the SwiftTerm view; only the visible slot sends. */
   onMouse?(input: TerminalWheelInput): void;
@@ -55,10 +50,9 @@ export interface TerminalSwapViewProps {
 }
 
 /** Keeps the last painted terminal visible while the newest target renders off-screen. */
-export const TerminalSwapView = forwardRef<TerminalWebViewHandle, TerminalSwapViewProps>(
+export const TerminalSwapView = forwardRef<TerminalStreamHandle, TerminalSwapViewProps>(
   function TerminalSwapView({
     agent,
-    renderer = 'webview',
     fontFamily = 'menlo',
     onMouse,
     panelId,
@@ -69,8 +63,8 @@ export const TerminalSwapView = forwardRef<TerminalWebViewHandle, TerminalSwapVi
     onRenderStage,
   }, forwardedRef) {
     const slotRefs = [
-      useRef<TerminalWebViewHandle>(null),
-      useRef<TerminalWebViewHandle>(null),
+      useRef<TerminalStreamHandle>(null),
+      useRef<TerminalStreamHandle>(null),
     ] as const;
     const [activeSlot, setActiveSlot] = useState<0 | 1>(0);
     const [mountedSlots, setMountedSlots] = useState<[boolean, boolean]>([true, false]);
@@ -224,14 +218,15 @@ export const TerminalSwapView = forwardRef<TerminalWebViewHandle, TerminalSwapVi
       }, []),
     ] as const;
 
-    const useSwiftTerm = renderer === 'swiftterm' && swiftTermAvailable;
+    // Stable like the handlers above: SwiftTermTerminalView is memoized, and a
+    // fresh closure per render would redraw the native view on every keystroke.
     const mouseHandlers = [
-      (input: TerminalWheelInput) => {
+      useCallback((input: TerminalWheelInput) => {
         if (activeSlotRef.current === 0) onMouseRef.current?.(input);
-      },
-      (input: TerminalWheelInput) => {
+      }, []),
+      useCallback((input: TerminalWheelInput) => {
         if (activeSlotRef.current === 1) onMouseRef.current?.(input);
-      },
+      }, []),
     ] as const;
     const pendingSlot = pendingRef.current?.slot ?? null;
     enabledSlotsRef.current = [
@@ -239,6 +234,7 @@ export const TerminalSwapView = forwardRef<TerminalWebViewHandle, TerminalSwapVi
       activeSlot === 1 || pendingSlot === 1,
     ];
 
+    if (!swiftTermAvailable) return <NativeTerminalUnavailable theme={theme} />;
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.panel }]}>
         {([0, 1] as const).map((slot) => {
@@ -254,31 +250,18 @@ export const TerminalSwapView = forwardRef<TerminalWebViewHandle, TerminalSwapVi
               style={[styles.slot, visible ? styles.visible : styles.hidden]}
               testID={`terminal-swap-slot-${slot}`}
             >
-              {useSwiftTerm ? (
-                <SwiftTermTerminalView
-                  agent={identity.agent}
-                  fontFamily={fontFamily}
-                  onMouse={mouseHandlers[slot]}
-                  panelId={identity.panelId}
-                  onPaint={paintHandlers[slot]}
-                  onRecoveryNeeded={recoveryHandlers[slot]}
-                  onRenderStage={renderStageHandlers[slot]}
-                  onResize={resizeHandlers[slot]}
-                  ref={slotRefs[slot]}
-                  theme={theme}
-                />
-              ) : (
-                <TerminalWebView
-                  agent={identity.agent}
-                  panelId={identity.panelId}
-                  onPaint={paintHandlers[slot]}
-                  onRecoveryNeeded={recoveryHandlers[slot]}
-                  onRenderStage={renderStageHandlers[slot]}
-                  onResize={resizeHandlers[slot]}
-                  ref={slotRefs[slot]}
-                  theme={theme}
-                />
-              )}
+              <SwiftTermTerminalView
+                agent={identity.agent}
+                fontFamily={fontFamily}
+                onMouse={mouseHandlers[slot]}
+                panelId={identity.panelId}
+                onPaint={paintHandlers[slot]}
+                onRecoveryNeeded={recoveryHandlers[slot]}
+                onRenderStage={renderStageHandlers[slot]}
+                onResize={resizeHandlers[slot]}
+                ref={slotRefs[slot]}
+                theme={theme}
+              />
             </View>
           );
         })}

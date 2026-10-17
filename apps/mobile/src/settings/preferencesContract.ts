@@ -68,7 +68,8 @@ export const DEFAULT_MOBILE_PREFERENCES: MobilePreferences = Object.freeze({
   v: 2,
   theme: 'system',
   language: 'system',
-  terminalView: 'reflow-view',
+  // Rendering ignores this field (native only, 2026-10-17); kept for stored-data compatibility.
+  terminalView: 'swiftterm-view',
   keyboardMode: 'simple',
   terminalFont: 'menlo',
   takeoverFollowsPhone: true,
@@ -124,7 +125,7 @@ export function migrateMobilePreferencesV1(value: unknown): MobilePreferences | 
     v: 2,
     theme: legacy.theme,
     language: legacy.language ?? 'system',
-    terminalView: legacy.terminalRenderer === 'legacy-webview' ? 'webview' : 'reflow-view',
+    terminalView: 'swiftterm-view',
     notifications: { ...legacy.notifications },
   };
 }

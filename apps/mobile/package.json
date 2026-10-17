@@ -1,6 +1,6 @@
 {
   "name": "@connect/mobile",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "main": "index.ts",
   "dependencies": {
     "@gorhom/bottom-sheet": "5.2.13",
@@ -53,13 +53,11 @@
     }
   },
   "scripts": {
-    "terminal:build": "node ../../scripts/build-mobile-terminal.mjs",
-    "terminal:check": "node ../../scripts/build-mobile-terminal.mjs --check",
     "room:build": "node ../../scripts/build-mobile-room.mjs",
     "room:check": "node ../../scripts/build-mobile-room.mjs --check",
     "icons:build": "node ../../scripts/build-mobile-file-icons.mjs",
     "icons:check": "node ../../scripts/build-mobile-file-icons.mjs --check",
-    "assets:check": "npm run terminal:check && npm run room:check && npm run icons:check",
+    "assets:check": "npm run room:check && npm run icons:check",
     "prestart": "npm run assets:check",
     "start": "expo start",
     "preios": "npm run assets:check",

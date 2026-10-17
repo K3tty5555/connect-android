@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import type { MobilePanelStatus } from '../../../../src/shared/types';
+import { PanelStatusLamp, lampTone, panelStatusLabel } from '../components/PanelStatusLamp';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ChevronRight, Folder, Plus, Settings } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -29,6 +31,8 @@ export type TabletSidebarMode = 'projects' | 'files';
  * iPad 侧栏，对应 Mac 左侧栏：「项目」= 工作区列表（展开即其会话），「文件」= 当前项目的
  * 资源管理器。只是排版不同，所有动作都回到 App 里与 iPhone 同一套处理函数。
  */
+const NO_PANEL_STATUSES: Readonly<Record<string, MobilePanelStatus>> = {};
+
 export function TabletSidebar({
   state,
   presentedConnection,
@@ -52,7 +56,10 @@ export function TabletSidebar({
   onOpenFile,
   onFileRemoved,
   onOpenSettings,
+  panelStatuses = NO_PANEL_STATUSES,
 }: {
+  /** The desktop's lamp per panel (MOBILE-SESSION-RUN-STATE-01). */
+  panelStatuses?: Readonly<Record<string, MobilePanelStatus>>;
   state: SessionViewModel;
   presentedConnection: ConnectionState;
   theme: ConnectTheme;
@@ -225,6 +232,15 @@ export function TabletSidebar({
                         >
                           <KindIcon kind={panel.kind} size={17} theme={theme} />
                           <Text numberOfLines={1} style={styles.sessionLabel}>{panelDisplayLabel(panel)}</Text>
+                          {online && panelStatuses[panel.panelId] !== undefined ? (
+                            <PanelStatusLamp
+                              label={panelStatusLabel(panelStatuses[panel.panelId]!)}
+                              size={7}
+                              testID={`sidebar-status-${panel.panelId}`}
+                              theme={theme}
+                              tone={lampTone(panelStatuses[panel.panelId]!)}
+                            />
+                          ) : null}
                         </MotionPressable>
                       );
                     })}

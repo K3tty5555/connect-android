@@ -16,6 +16,10 @@ export const CONNECT_PALETTE = {
     danger: '#e0685c',
     // 可交互 / 选中 / 开启 / 进行中；与桌面 --accent 同值，不借用身份色
     accent: '#75a7ff',
+    // 会话状态灯，与桌面 --lamp-* 同值（MOBILE-SESSION-RUN-STATE-01）
+    lampRed: '#ff5f57',
+    lampYellow: '#febc2e',
+    lampGreen: '#28c840',
     overlay: '#0e1014b8',
   },
   light: {
@@ -34,6 +38,9 @@ export const CONNECT_PALETTE = {
     warn: '#b07f1e',
     danger: '#b94339',
     accent: '#2368c4',
+    lampRed: '#ff5f57',
+    lampYellow: '#febc2e',
+    lampGreen: '#28c840',
     overlay: '#23272e66',
   },
 } as const;

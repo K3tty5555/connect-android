@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import type { MobilePanelStatus } from '../../../../src/shared/types';
+import { PanelStatusLamp, aggregateLampLabel, aggregateLampTone } from '../components/PanelStatusLamp';
 import { FlatList, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Download, Folder, ScanLine, Settings } from 'lucide-react-native';
 import type { PublicAppInfo, PublicLinkKind } from '../../../../src/shared/types';
@@ -21,6 +23,8 @@ import {
   useStableListEntries,
 } from '../components/StableMotionList';
 
+const NO_PANEL_STATUSES: Readonly<Record<string, MobilePanelStatus>> = {};
+
 export function HomeScreen({
   state,
   presentedConnection = state.connection,
@@ -33,7 +37,10 @@ export function HomeScreen({
   publicAppInfo,
   onOpenPublicLink,
   onOpenSettings,
+  panelStatuses = NO_PANEL_STATUSES,
 }: {
+  /** The desktop's lamp per panel; a project shows its most urgent one. */
+  panelStatuses?: Readonly<Record<string, MobilePanelStatus>>;
   state: SessionViewModel;
   presentedConnection?: ConnectionState;
   /**
@@ -185,6 +192,10 @@ export function HomeScreen({
             const panels = workspacePanels(item.workspaceCapability);
             const activeCount = item.activeSurfaceCount;
             const dimmed = presentedConnection !== 'online';
+            // Only while connected: an old colour must not pass for the current one.
+            const tone = presentedConnection === 'online'
+              ? aggregateLampTone(panels.map((panel) => panelStatuses[panel.panelId]))
+              : null;
             return (
               <StableMotionRow
                 animateEnter={entry.entering}
@@ -202,7 +213,15 @@ export function HomeScreen({
                   <View style={styles.projectCopy}>
                     <Text numberOfLines={1} style={styles.projectLabel}>{item.label}</Text>
                     <View style={styles.projectMeta}>
-                      <View style={[styles.statusDot, presentedConnection === 'online' ? styles.statusOnline : styles.statusOffline]} />
+                      {tone !== null ? (
+                        <PanelStatusLamp
+                          label={aggregateLampLabel(tone)}
+                          size={7}
+                          testID={`project-status-${item.workspaceCapability}`}
+                          theme={theme}
+                          tone={tone}
+                        />
+                      ) : null}
                       <Text style={styles.projectDetail}>
                         {activeCount === 0 && panels.length === 0
                           ? t('最近项目')
@@ -266,9 +285,6 @@ function createStyles(theme: ConnectTheme) {
     projectCopy: { minWidth: 0, flex: 1, gap: SPACE.x1 },
     projectLabel: { color: theme.colors.text, fontSize: 16, fontWeight: '600' },
     projectMeta: { flexDirection: 'row', alignItems: 'center', gap: SPACE.x1 },
-    statusDot: { width: 7, height: 7, borderRadius: RADIUS.pill },
-    statusOnline: { backgroundColor: theme.colors.ok },
-    statusOffline: { backgroundColor: theme.colors.text3 },
     projectDetail: { color: theme.colors.text3, fontSize: 12 },
     chevron: { color: theme.colors.text3, fontSize: 26, fontWeight: '300' },
     emptyScroll: { flex: 1 },

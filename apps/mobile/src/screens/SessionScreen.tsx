@@ -1,5 +1,6 @@
 import { type Ref, useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Text, View } from 'react-native';
+import type { MobilePanelStatus } from '../../../../src/shared/types';
+import { ActivityIndicator, Alert, Text, View } from 'react-native';
 import { RefreshCw, ScanLine } from 'lucide-react-native';
 import {
   KeyboardAvoidingView,
@@ -36,10 +37,10 @@ import { TerminalQuickKeys } from '../components/TerminalQuickKeys';
 import { SurfaceCreateSheet } from '../components/SurfaceCreateSheet';
 import { MotionPressable } from '../components/MotionPressable';
 import {
-  type TerminalWebViewHandle,
-} from '../terminal/TerminalWebView';
+  type TerminalStreamHandle,
+} from '../terminal/terminalStreamHandle';
 import { TerminalSwapView } from '../terminal/TerminalSwapView';
-import { NativeTerminalGridView } from '../terminal/NativeTerminalGridView';
+import { NativeTerminalUnavailable } from '../terminal/NativeTerminalUnavailable';
 import { SwiftTermGridView } from '../terminal/SwiftTermGridView';
 import { swiftTermAvailable } from '../terminal/SwiftTermTerminalView';
 import { LastScreenView } from '../terminal/LastScreenView';
@@ -48,7 +49,6 @@ import type { NativeTerminalGridState } from '../terminal/terminalGridModel';
 import type {
   TerminalShortcutBindings,
   TerminalFontPreference,
-  TerminalViewPreference,
 } from '../../../../src/shared/types';
 import type { TerminalKeyModifiers, TerminalKeyName } from '../../../../src/shared/terminalInput';
 import { FullTerminalKeyboard } from '../terminal/FullTerminalKeyboard';
@@ -100,14 +100,21 @@ export interface SessionScreenProps {
   onComposerFocus?(): void;
   /** The keyboard shrinks this viewport; the PTY handover must ignore that. */
   onKeyboardVisibility?(visible: boolean): void;
-  terminalRef?: Ref<TerminalWebViewHandle>;
-  terminalView?: TerminalViewPreference;
+  terminalRef?: Ref<TerminalStreamHandle>;
   terminalFont?: TerminalFontPreference;
   /**
    * The terminal as it was last seen, from before this launch. Covers the live
    * view until its first paint; the caller stops passing it after that.
    */
   lastScreen?: LastScreen | null;
+  /**
+   * The opening is still waiting for phone-width frames: the live view keeps
+   * laying out (it measures the phone) but stays hidden behind the last screen
+   * or a loading state (MOBILE-NATIVE-RENDERER-ONLY-01).
+   */
+  terminalSettling?: boolean;
+  /** The desktop's lamp per panel (MOBILE-SESSION-RUN-STATE-01). */
+  panelStatuses?: Readonly<Record<string, MobilePanelStatus>>;
   /** 演示/UI 测试构建：SwiftTerm 视图暴露几何/最新行可见性（见 App.tsx NATIVE_GRID_DEMO） */
   terminalProbe?: boolean;
   terminalShortcuts?: TerminalShortcutBindings;
@@ -174,9 +181,10 @@ export function SessionScreen({
   onComposerFocus,
   onKeyboardVisibility,
   terminalRef,
-  terminalView = 'webview',
   terminalFont = 'menlo',
   lastScreen = null,
+  terminalSettling = false,
+  panelStatuses,
   terminalProbe = false,
   terminalShortcuts,
   terminalQueueDepth = 0,
@@ -265,7 +273,9 @@ export function SessionScreen({
   const [inputSurface, setInputSurface] = useState<'system' | 'full-keyboard'>('system');
   const fullKeyboardAvailable = !isCollaboration && (terminalInputAvailable || state.isDemo);
   const fullKeyboardOpen = fullKeyboardAvailable && inputSurface === 'full-keyboard';
-  const usesByteStream = terminalView === 'webview';
+  // Grid frames are the normal transport; the byte stream is only the
+  // compatibility fallback. Both are drawn by the native view.
+  const usesByteStream = terminalRendererFallback;
   inputChromeOpenRef.current = fullKeyboardOpen || quickKeysExpanded;
 
   useAndroidBack(state.draft, onBackToProject ? () => {
@@ -426,6 +436,7 @@ export function SessionScreen({
       ) : null}
       {state.connection !== 'unpaired' && !state.isDemo ? (
         <PanelSwitcher
+          panelStatuses={panelStatuses}
           activePanelId={state.activePanelId}
           connection={presentedConnection}
           onRefresh={onPanelsRefresh}
@@ -579,7 +590,22 @@ export function SessionScreen({
                 onImagePress={onRoomImageOpen}
                 theme={theme}
               />
-            ) : terminalView === 'swiftterm-view' && swiftTermAvailable && nativeGridPresentation !== null ? (
+            ) : state.isDemo && nativeGridPresentation === null ? (
+              <TerminalFeed
+                agent={state.agent}
+                lines={state.lines}
+                theme={theme}
+              />
+            ) : !swiftTermAvailable ? (
+              <NativeTerminalUnavailable theme={theme} />
+            ) : !usesByteStream && nativeGridPresentation !== null ? (
+              <View
+                accessibilityElementsHidden={terminalSettling}
+                importantForAccessibility={terminalSettling ? 'no-hide-descendants' : 'auto'}
+                pointerEvents={terminalSettling ? 'none' : 'auto'}
+                style={{ flex: 1, opacity: terminalSettling ? 0 : 1 }}
+                testID="terminal-live-view"
+              >
               <SwiftTermGridView
                 keyboardOpen={keyboardVisible || fullKeyboardOpen}
   probe={terminalProbe}
@@ -597,30 +623,16 @@ export function SessionScreen({
                 fontFamily={terminalFont}
                 theme={theme}
               />
-            ) : !usesByteStream && nativeGridPresentation !== null ? (
-              <NativeTerminalGridView
-                frame={nativeGridPresentation.frame}
-                operationId={nativeGridPresentation.operationId}
-                agent={activePanel?.kind === 'claude' || activePanel?.kind === 'codex' || activePanel?.kind === 'shell'
-                  ? activePanel.kind : undefined}
-                onMouse={onTerminalMouse}
-                onPaint={routeActive ? onTerminalPaint : undefined}
-                onViewport={routeActive && !keyboardVisible ? forwardTerminalResize : undefined}
-                fontFamily={terminalFont}
-                presentation={terminalView === 'exact-grid-view' ? 'exact-grid-view' : 'reflow-view'}
-                theme={theme}
-              />
-            ) : state.isDemo ? (
-              <TerminalFeed
-                agent={state.agent}
-                lines={state.lines}
-                theme={theme}
-              />
+              </View>
             ) : !usesByteStream ? (
-              <View style={{ flex: 1, backgroundColor: theme.colors.panel }} />
+              state.connection === 'online' && lastScreen === null
+                ? <TerminalLoading theme={theme} />
+                : <View style={{ flex: 1, backgroundColor: theme.colors.panel }} />
             ) : (
               <TerminalSwapView
                 agent={state.agent}
+                fontFamily={terminalFont}
+                onMouse={onTerminalMouse}
                 panelId={state.activePanelId ?? 'unknown-panel'}
                 onPaint={routeActive ? onTerminalPaint : undefined}
                 onRecoveryNeeded={routeActive ? onTerminalRecoveryNeeded : undefined}
@@ -636,9 +648,12 @@ export function SessionScreen({
                 <LastScreenView
                   fontFamily={terminalFont}
                   screen={lastScreen}
-                  terminalView={terminalView}
                   theme={theme}
                 />
+              </View>
+            ) : terminalSettling && !isCollaboration ? (
+              <View style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}>
+                <TerminalLoading theme={theme} />
               </View>
             ) : null}
             {surfaceLifecyclePresentation}
@@ -797,5 +812,20 @@ function PairButton({
       />
       <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '600' }}>{label}</Text>
     </MotionPressable>
+  );
+}
+
+/** The live terminal is on its way: said plainly, not implied by a blank panel. */
+function TerminalLoading({ theme }: { theme: ConnectTheme }): React.ReactElement {
+  return (
+    <View
+      accessibilityLabel={t('正在加载')}
+      accessibilityRole="progressbar"
+      style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: SPACE.x2, backgroundColor: theme.colors.panel }}
+      testID="terminal-loading"
+    >
+      <ActivityIndicator color={theme.colors.text2} />
+      <Text style={{ color: theme.colors.text2, fontSize: 13 }}>{t('正在加载')}</Text>
+    </View>
   );
 }

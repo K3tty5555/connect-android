@@ -1,12 +1,12 @@
 {
   "name": "connect-android",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
     "package:android": "bash scripts/package-android.sh",
-    "mobile:assets": "node scripts/build-mobile-terminal.mjs && node scripts/build-mobile-room.mjs && node scripts/build-mobile-file-icons.mjs"
+    "mobile:assets": "node scripts/build-mobile-room.mjs && node scripts/build-mobile-file-icons.mjs"
   },
   "devDependencies": {
     "vite": "7.3.6",

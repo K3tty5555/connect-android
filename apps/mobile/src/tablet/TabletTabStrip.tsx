@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import type { MobilePanelStatus } from '../../../../src/shared/types';
+import { PanelStatusLamp, lampTone, panelStatusLabel } from '../components/PanelStatusLamp';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { PanelLeft, Plus, X } from 'lucide-react-native';
 import type { SessionPanelSummary } from '../domain/session';
@@ -16,6 +18,8 @@ export interface TabletFileTab {
   workspaceLabel: string;
   subPath: string;
 }
+
+const NO_PANEL_STATUSES: Readonly<Record<string, MobilePanelStatus>> = {};
 
 export function tabletFileTabKey(tab: Pick<TabletFileTab, 'workspaceCapability' | 'subPath'>): string {
   return `${tab.workspaceCapability}:${tab.subPath}`;
@@ -38,7 +42,13 @@ export function TabletTabStrip({
   onSelectFile,
   onCloseFile,
   onCreateSession,
+  online = false,
+  panelStatuses = NO_PANEL_STATUSES,
 }: {
+  /** Lamps show only while connected: an old colour must not pass for the current one. */
+  online?: boolean;
+  /** The desktop's lamp per panel (MOBILE-SESSION-RUN-STATE-01). */
+  panelStatuses?: Readonly<Record<string, MobilePanelStatus>>;
   theme: ConnectTheme;
   sidebarVisible: boolean;
   sessions: readonly SessionPanelSummary[];
@@ -99,6 +109,15 @@ export function TabletTabStrip({
               <Text maxFontSizeMultiplier={MAX_COMPACT_FONT_SCALE} numberOfLines={1} style={[styles.label, selected ? styles.labelSelected : null]}>
                 {panelDisplayLabel(panel)}
               </Text>
+              {online && panelStatuses[panel.panelId] !== undefined ? (
+                <PanelStatusLamp
+                  label={panelStatusLabel(panelStatuses[panel.panelId]!)}
+                  size={7}
+                  testID={`tab-status-${panel.panelId}`}
+                  theme={theme}
+                  tone={lampTone(panelStatuses[panel.panelId]!)}
+                />
+              ) : null}
             </MotionPressable>
           );
         })}

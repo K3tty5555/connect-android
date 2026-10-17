@@ -47,6 +47,7 @@ import {
 } from '../domain/mobileConnectionRecoveryOwner';
 import { MobileConnectionFlapGuard } from './mobileConnectionFlapGuard';
 import type {
+  MobilePanelState,
   MobileServerCapability,
   TerminalGridFrame,
   TerminalGridRow,
@@ -94,8 +95,9 @@ const MIME_RE = /^[a-z]+\/[a-z0-9.+-]+$/u;
 /** 未来桌面可能声明新能力：未知串只忽略，不得像 1.0.0 那样整份丢弃工作区列表。 */
 const CAPABILITY_TOKEN_RE = /^[a-z0-9-]{1,40}$/u;
 const KNOWN_SERVER_CAPABILITIES: readonly MobileServerCapability[] = [
-  'terminal-grid-v1', 'workspace-files-v1', 'workspace-office-preview-v1',
+  'terminal-grid-v1', 'workspace-files-v1', 'workspace-office-preview-v1', 'panel-states-v1',
 ];
+const PANEL_STATUSES: readonly MobilePanelState['status'][] = ['needs_input', 'error', 'unread', 'running', 'idle'];
 const FILE_CONTENT_KINDS: readonly MobileFileContentKind[] = [
   'text', 'image', 'pdf', 'audio', 'video', 'office', 'unsupported', 'too_large', 'binary',
 ];
@@ -178,6 +180,8 @@ export type MobileCommand =
   | { kind: 'listRooms'; requestId?: string }
   | { kind: 'listNotifications'; requestId: string }
   | { kind: 'markNotificationsRead'; requestId: string; cursor: number }
+  | { kind: 'watchPanelStates'; requestId: string }
+  | { kind: 'markPanelRead'; requestId: string; panelId: string }
   | { kind: 'getCollaborationProfile'; requestId: string; workspaceCapability: string }
   | {
       kind: 'setCollaborationAvatar';
@@ -305,6 +309,7 @@ export type MobileEvent =
       workspaces: MobileWorkspaceSummary[];
     }
   | { kind: 'panelList'; requestId?: string; panels: MobilePanelSummary[] }
+  | { kind: 'panelStates'; requestId?: string; panels: MobilePanelState[] }
   | { kind: 'roomList'; requestId?: string; rooms: MobileRoomSummary[] }
   | {
       kind: 'notificationList';
@@ -1181,6 +1186,22 @@ export function parseMobileEvent(value: unknown): MobileEvent {
         ))
       ) return value as unknown as MobileEvent;
       break;
+    case 'panelStates':
+      if (
+        exactKeys(value, ['kind', 'requestId', 'panels'])
+        && (value.requestId === undefined
+          || (typeof value.requestId === 'string' && REQUEST_ID_RE.test(value.requestId)))
+        && Array.isArray(value.panels)
+        && value.panels.length <= 100
+        && value.panels.every((panel) => (
+          isObject(panel)
+          && exactKeys(panel, ['panelId', 'status'])
+          && typeof panel.panelId === 'string'
+          && PANEL_ID_RE.test(panel.panelId)
+          && (PANEL_STATUSES as readonly unknown[]).includes(panel.status)
+        ))
+      ) return value as unknown as MobileEvent;
+      break;
     case 'roomList':
       if (
         exactKeys(value, ['kind', 'requestId', 'rooms'])
@@ -1934,6 +1955,8 @@ export class BridgeClient {
   private terminalGridCapability: boolean | null = null;
   private workspaceFilesCapability = false;
   private officePreviewCapability = false;
+  /** The desktop advertised panel-states-v1 on this connection (MOBILE-SESSION-RUN-STATE-01). */
+  private panelStatesCapability = false;
   private capabilityProbe: {
     promise: Promise<boolean>;
     resolve(supported: boolean): void;
@@ -2906,6 +2929,13 @@ export class BridgeClient {
         true,
         event.capabilities.includes('workspace-office-preview-v1'),
       );
+      this.panelStatesCapability = event.capabilities.includes('panel-states-v1');
+      // Watching is per connection on the desktop: ask again on every connection
+      // that advertises it, and never on one that does not (an older Mac closes
+      // the socket on an unknown command).
+      if (this.panelStatesCapability) {
+        void this.send({ kind: 'watchPanelStates', requestId: createMobileRequestId() }).catch(() => undefined);
+      }
       return;
     }
     if (event.requestId === MOBILE_CAPABILITY_PROBE_REQUEST_ID) {
@@ -2915,6 +2945,11 @@ export class BridgeClient {
 
   get supportsWorkspaceFiles(): boolean {
     return this.workspaceFilesCapability;
+  }
+
+  /** 桌面声明了 panel-states-v1：才可以发 markPanelRead；旧桌面会以 1008 断开未知命令。 */
+  get supportsPanelStates(): boolean {
+    return this.panelStatesCapability;
   }
 
   /** 桌面声明了 workspace-office-preview-v1：openFile 才可以带 acceptContentKinds: ['office']。 */
@@ -2955,6 +2990,7 @@ export class BridgeClient {
     const probe = this.capabilityProbe;
     this.capabilityProbe = null;
     this.terminalGridCapability = null;
+    this.panelStatesCapability = false;
     if (probe === null) return;
     this.cancelSchedule(probe.timer);
     probe.resolve(false);

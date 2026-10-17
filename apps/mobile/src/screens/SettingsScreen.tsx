@@ -47,7 +47,6 @@ import { MAX_COMPACT_FONT_SCALE, RADIUS, SPACE } from '../theme/tokens';
 import { MotionPressable } from '../components/MotionPressable';
 import { SettingsSelect } from '../components/SettingsSelect';
 import { t } from '../i18n';
-import { swiftTermAvailable } from '../terminal/SwiftTermTerminalView';
 import { useAndroidBack } from '../platform/useAndroidBack';
 
 const CONNECTION_LABELS: Record<ConnectionState, string> = {
@@ -77,25 +76,6 @@ const LANGUAGE_OPTIONS: ReadonlyArray<{
   { value: 'en', label: LANGUAGE_AUTONYMS.en },
 ];
 
-const TERMINAL_VIEW_OPTIONS: ReadonlyArray<{
-  value: MobilePreferences['terminalView'];
-  label: string;
-  description: string;
-}> = [
-  { value: 'reflow-view', label: 'Reflow View', description: '按手机宽度重新折行，适合阅读' },
-  { value: 'exact-grid-view', label: 'Exact Grid View', description: '与电脑终端逐格一致，可横向拖动' },
-  { value: 'webview', label: 'WebView', description: '兼容模式，其他视图异常时使用' },
-  // Offered only where the binary carries the native view; elsewhere choosing it
-  // would silently mean the WebView. The label is resolved per platform at render.
-  ...(swiftTermAvailable
-    ? [{ value: 'swiftterm-view' as const, label: 'SwiftTerm', description: '原生终端引擎，全屏程序的历史也可本地翻看' }]
-    : []),
-];
-
-/**
- * 原生终端按实际引擎命名：iOS 是 SwiftTerm，Android 是 Termux（2026-10-15）。
- * 存储值 `swiftterm-view` 两端共用不改名，已选过的用户升级后选择照旧生效。
- */
 /**
  * Android 版内嵌 Termux（GPLv3），整个 Android 版随之以 GPLv3 开源（用户 2026-10-15/16 拍板）。
  * 这段是 GPLv3 §0 要求的适当法律声明：协议、无担保、源码去处，以及随包第三方组件的许可。
@@ -110,10 +90,6 @@ function defaultTerminalFontLabel(): { label: string; description: string } {
   return Platform.OS === 'android'
     ? { label: 'DejaVu Sans Mono', description: '与 iOS 默认的 Menlo 同源的等宽字体' }
     : { label: 'Menlo', description: '系统自带的等宽字体' };
-}
-
-function nativeTerminalLabel(): string {
-  return Platform.OS === 'android' ? 'Termux' : 'SwiftTerm';
 }
 
 const TERMINAL_FONT_OPTIONS: ReadonlyArray<{
@@ -381,22 +357,6 @@ export function SettingsScreen({
         {advancedOpen ? (
           <>
             <SettingsSection icon={SquareTerminal} title={t('终端显示')} theme={theme}>
-              <SettingsSelect
-                description={t('手机上怎样画出终端')}
-                disabled={preferenceDisabled}
-                onChange={(terminalView) => onPreferencesChange({ terminalView })}
-                options={TERMINAL_VIEW_OPTIONS.map((option) => ({
-                  ...option,
-                  label: option.value === 'swiftterm-view' ? nativeTerminalLabel() : option.label,
-                  description: t(option.description),
-                }))}
-                theme={theme}
-                title={t('终端视图')}
-                // A stored SwiftTerm this build cannot draw shows as what is really used.
-                value={preferences.terminalView === 'swiftterm-view' && !swiftTermAvailable
-                  ? 'reflow-view'
-                  : preferences.terminalView}
-              />
               <SettingsSelect
                 description={t('终端里文字的字体')}
                 disabled={preferenceDisabled}

@@ -1,15 +1,15 @@
 import { useEffect, useRef } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import type { TerminalFontPreference, TerminalViewPreference } from '../../../../src/shared/types';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import type { TerminalFontPreference } from '../../../../src/shared/types';
 import type { ConnectTheme } from '../theme/theme';
 import { RADIUS, SPACE } from '../theme/tokens';
 import { t } from '../i18n';
 import type { LastScreen } from './lastScreenStore';
-import { NativeTerminalGridView } from './NativeTerminalGridView';
+import { NativeTerminalUnavailable } from './NativeTerminalUnavailable';
 import { SwiftTermGridView } from './SwiftTermGridView';
 import { swiftTermAvailable } from './SwiftTermTerminalView';
 import { TerminalSwapView } from './TerminalSwapView';
-import type { TerminalWebViewHandle } from './TerminalWebView';
+import type { TerminalStreamHandle } from './terminalStreamHandle';
 
 const ignoreResize = (): void => {};
 
@@ -18,20 +18,19 @@ const ignoreResize = (): void => {};
  *
  * It reports no geometry and no paints: it must never be mistaken for the live
  * terminal by the handover or the swap coordinator. The label stays until the
- * caller removes the whole view on the first live paint.
+ * caller removes the whole view on the first live paint; until then the live
+ * terminal is still loading, and the label says so (MOBILE-NATIVE-RENDERER-ONLY-01).
  */
 export function LastScreenView({
   screen,
-  terminalView,
   fontFamily,
   theme,
 }: {
   screen: LastScreen;
-  terminalView: TerminalViewPreference;
   fontFamily: TerminalFontPreference;
   theme: ConnectTheme;
 }): React.ReactElement {
-  const terminalRef = useRef<TerminalWebViewHandle>(null);
+  const terminalRef = useRef<TerminalStreamHandle>(null);
   const content = screen.screen;
   const agent = screen.surfaceKind === 'claude' || screen.surfaceKind === 'codex' || screen.surfaceKind === 'shell'
     ? screen.surfaceKind
@@ -44,19 +43,13 @@ export function LastScreenView({
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.panel }]} testID="terminal-last-screen">
-      {content.kind === 'grid' && terminalView === 'swiftterm-view' && swiftTermAvailable ? (
+      {!swiftTermAvailable ? (
+        <NativeTerminalUnavailable theme={theme} />
+      ) : content.kind === 'grid' ? (
         <SwiftTermGridView
           agent={agent}
           fontFamily={fontFamily}
           frame={content.frame}
-          theme={theme}
-        />
-      ) : content.kind === 'grid' ? (
-        <NativeTerminalGridView
-          agent={agent}
-          fontFamily={fontFamily}
-          frame={content.frame}
-          presentation={terminalView === 'exact-grid-view' ? 'exact-grid-view' : 'reflow-view'}
           theme={theme}
         />
       ) : (
@@ -66,7 +59,6 @@ export function LastScreenView({
           onResize={ignoreResize}
           panelId="last-screen"
           ref={terminalRef}
-          renderer={terminalView === 'swiftterm-view' ? 'swiftterm' : 'webview'}
           theme={theme}
         />
       )}
@@ -74,7 +66,10 @@ export function LastScreenView({
         pointerEvents="none"
         style={[styles.badge, { backgroundColor: theme.colors.panel2, borderColor: theme.colors.line2 }]}
       >
-        <Text style={[styles.badgeText, { color: theme.colors.text2 }]}>{t('上次画面')}</Text>
+        <ActivityIndicator color={theme.colors.text2} size="small" />
+        <Text style={[styles.badgeText, { color: theme.colors.text2 }]}>
+          {`${t('上次画面')} · ${t('正在加载')}`}
+        </Text>
       </View>
     </View>
   );
@@ -90,6 +85,9 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: RADIUS.control,
     borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACE.x1,
   },
   badgeText: { fontSize: 12, fontWeight: '600' },
 });

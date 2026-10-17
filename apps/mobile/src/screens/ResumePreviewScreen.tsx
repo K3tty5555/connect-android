@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronLeft } from 'lucide-react-native';
-import type { TerminalFontPreference, TerminalViewPreference } from '../../../../src/shared/types';
+import type { TerminalFontPreference } from '../../../../src/shared/types';
 import { MotionPressable } from '../components/MotionPressable';
 import type { ConnectionState } from '../domain/session';
 import type { ConnectTheme } from '../theme/theme';
@@ -22,7 +22,6 @@ export function ResumePreviewScreen({
   screen,
   connection,
   connectionDetail,
-  terminalView,
   fontFamily,
   theme,
   onBack,
@@ -30,7 +29,6 @@ export function ResumePreviewScreen({
   screen: LastScreen;
   connection: ConnectionState;
   connectionDetail: string | null;
-  terminalView: TerminalViewPreference;
   fontFamily: TerminalFontPreference;
   theme: ConnectTheme;
   onBack(): void;
@@ -72,7 +70,6 @@ export function ResumePreviewScreen({
       <LastScreenView
         fontFamily={fontFamily}
         screen={screen}
-        terminalView={terminalView}
         theme={theme}
       />
     </SafeAreaView>

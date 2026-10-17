@@ -23,9 +23,9 @@ import { READING_FONT_SIZE } from './terminalGridMetrics';
 import type { TerminalGeometry, TerminalSegment } from './terminalSegments';
 import type {
   TerminalRestoreState,
-  TerminalWebViewHandle,
-  TerminalWebViewProps,
-} from './TerminalWebView';
+  TerminalStreamHandle,
+  TerminalStreamProps,
+} from './terminalStreamHandle';
 
 const OPERATION_ID_PATTERN = /^(?:req|perf)_[a-zA-Z0-9_-]{8,64}$/u;
 
@@ -87,7 +87,7 @@ export type TerminalWheelInput = {
   row: number;
 };
 
-export interface SwiftTermTerminalViewProps extends TerminalWebViewProps {
+export interface SwiftTermTerminalViewProps extends TerminalStreamProps {
   fontFamily: TerminalFontPreference;
   /**
    * Wheel notches for a full-screen app's own history. The same mouse path
@@ -102,7 +102,7 @@ export interface SwiftTermTerminalViewProps extends TerminalWebViewProps {
  * Everything above it — the swap view, recovery, paint reporting — keeps
  * working unchanged, which is what lets the renderer be a setting.
  */
-const SwiftTermTerminalViewComponent = forwardRef<TerminalWebViewHandle, SwiftTermTerminalViewProps>(
+const SwiftTermTerminalViewComponent = forwardRef<TerminalStreamHandle, SwiftTermTerminalViewProps>(
   function SwiftTermTerminalView({
     agent,
     fontFamily,
