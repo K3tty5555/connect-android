@@ -72,6 +72,7 @@ import {
   type PairedDesktopProfile,
 } from './src/net/bridgeClient';
 import { MobileConnectFailureError } from './src/net/mobileConnectFailure';
+import { relayTicketForDevice } from './src/net/relayTransport';
 import { PairingClient } from './src/pairing/pairingClient';
 import { PairingFlow } from './src/pairing/PairingFlow';
 import {
@@ -385,6 +386,7 @@ export default function App(): React.ReactElement {
   /** The panel an exact cold-start resume landed on: the only one the saved screen may cover. */
   const [resumedPanelId, setResumedPanelId] = useState<string | null>(null);
   const [desktopKey, setDesktopKey] = useState<string | null>(null);
+  const [relayProfile, setRelayProfile] = useState<PairedDesktopProfile['relay'] | null>(null);
   const desktopKeyRef = useRef<string | null>(null);
   desktopKeyRef.current = desktopKey;
   const navigationRef = useRef(navigation);
@@ -2240,6 +2242,7 @@ export default function App(): React.ReactElement {
       }
       dispatch({ type: 'paired', deviceName: `Mac · ${stored.host}` });
       setDesktopKey(desktopKeyOf(stored));
+      setRelayProfile(stored.relay ?? null);
       // Saved against another pairing: it can never be shown, so it is not kept.
       const saved = lastScreenStore.load();
       if (saved !== null && saved.desktopKey !== desktopKeyOf(stored)) {
@@ -3734,6 +3737,20 @@ export default function App(): React.ReactElement {
     });
   };
 
+  const updateRelayProfile = async (config: { url: string; apiKey: string } | null): Promise<void> => {
+    const current = await profileStore.load();
+    if (!current) throw new Error('no paired desktop');
+    const next = config === null
+      ? await profileStore.setRelay(null)
+      : await profileStore.setRelay({
+          url: config.url,
+          apiKey: config.apiKey,
+          ticket: await relayTicketForDevice(current.deviceId, current.desktopIdentityPubKey),
+        });
+    setRelayProfile(next.relay ?? null);
+    bridge.current?.connect(next);
+  };
+
   const routeView = (
       <RouteTransitionView
         contentReady={routeContentReady}
@@ -3827,6 +3844,8 @@ export default function App(): React.ReactElement {
               onUnpair={() => {
                 void forgetPairingRef.current?.(null);
               }}
+              relay={relayProfile}
+              onRelayChange={updateRelayProfile}
               publicAppInfo={MOBILE_PUBLIC_APP_INFO}
               onOpenPublicLink={openMobilePublicLink}
               onBack={() => navigate({ type: 'back' })}

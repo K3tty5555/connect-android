@@ -1,6 +1,6 @@
 {
   "name": "@connect/mobile",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "main": "index.ts",
   "dependencies": {
     "@gorhom/bottom-sheet": "5.2.13",
@@ -55,6 +55,7 @@
   "scripts": {
     "room:build": "node ../../scripts/build-mobile-room.mjs",
     "room:check": "node ../../scripts/build-mobile-room.mjs --check",
+    "terminal:build": "npm run assets:check",
     "icons:build": "node ../../scripts/build-mobile-file-icons.mjs",
     "icons:check": "node ../../scripts/build-mobile-file-icons.mjs --check",
     "assets:check": "npm run room:check && npm run icons:check",

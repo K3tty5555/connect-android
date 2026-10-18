@@ -6,24 +6,27 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { ScanLine, ShieldCheck, X } from 'lucide-react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { PairedDesktopProfile } from '../net/bridgeClient';
+import { parsePairingQr, type PairingRelayConfig } from './pairingClient';
+import { PendingRelayStore } from '../net/pendingRelay';
 import type { ConnectTheme } from '../theme/theme';
 import { MAX_COMPACT_FONT_SCALE, RADIUS, SPACE } from '../theme/tokens';
 import { t } from '../i18n';
 
 export interface PairingController {
-  start(rawQr: string, deviceName: string): Promise<string>;
+  start(rawQr: string, deviceName: string, relayConfig?: PairingRelayConfig): Promise<string>;
   confirmSas(): Promise<PairedDesktopProfile>;
   rejectSas(): void;
   cancel(): void;
 }
 
-type FlowState = 'scanner' | 'connecting' | 'sas' | 'waiting' | 'error';
+type FlowState = 'scanner' | 'relay_setup' | 'connecting' | 'sas' | 'waiting' | 'error';
 
 export function PairingFlow({
   open,
@@ -45,6 +48,13 @@ export function PairingFlow({
   const [state, setState] = useState<FlowState>('scanner');
   const [sas, setSas] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [relayConfig, setRelayConfig] = useState<PairingRelayConfig | null>(null);
+  const [relayUrl, setRelayUrl] = useState('');
+  const [relayApiKey, setRelayApiKey] = useState('');
+  const [relayFallbackUrl, setRelayFallbackUrl] = useState('');
+  const [relayFallbackApiKey, setRelayFallbackApiKey] = useState('');
+  const [pendingRelayQr, setPendingRelayQr] = useState<string | null>(null);
+  const pendingRelayStore = useRef(new PendingRelayStore());
   const scanned = useRef(false);
   const styles = createStyles(theme);
 
@@ -54,6 +64,13 @@ export function PairingFlow({
     setState(initialSas !== undefined ? 'sas' : 'scanner');
     setSas(initialSas ?? null);
     setError(null);
+    void pendingRelayStore.current.load().then((config) => {
+      setRelayConfig(config);
+      setRelayUrl(config?.url ?? '');
+      setRelayApiKey(config?.apiKey ?? '');
+      setRelayFallbackUrl(config?.fallbacks?.[0]?.url ?? '');
+      setRelayFallbackApiKey(config?.fallbacks?.[0]?.apiKey ?? '');
+    });
   }, [initialSas, open]);
 
   const close = (): void => {
@@ -61,22 +78,46 @@ export function PairingFlow({
     onClose();
   };
 
-  const scan = async (rawQr: string): Promise<void> => {
+  const scan = async (rawQr: string, relayOverride: PairingRelayConfig | null = relayConfig): Promise<void> => {
     if (scanned.current) return;
     scanned.current = true;
     setState('connecting');
     setError(null);
     try {
-      const value = await client.start(
-        rawQr,
-        Platform.OS === 'ios' ? 'iPhone Connect' : 'Android Connect',
-      );
+      let parsed: ReturnType<typeof parsePairingQr> | null = null;
+      try { parsed = parsePairingQr(rawQr); } catch { /* controller remains the source of pairing validation */ }
+      if (parsed?.relay !== undefined && relayOverride === null) {
+        scanned.current = false;
+        setPendingRelayQr(rawQr);
+        setState('relay_setup');
+        return;
+      }
+      const value = await client.start(rawQr, Platform.OS === 'ios' ? 'iPhone Connect' : 'Android Connect', relayOverride ?? undefined);
       setSas(value);
       setState('sas');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('无法完成配对。'));
       setState('error');
     }
+  };
+
+  const saveRelayAndContinue = async (): Promise<void> => {
+    const url = relayUrl.trim();
+    const apiKey = relayApiKey.trim();
+    if (pendingRelayQr === null || !/^wss:\/\//u.test(url) || !/^ck_live_[A-Za-z0-9_-]{32,140}$/u.test(apiKey)) {
+      setError(t('请输入有效的 Relay 地址和 API Key。'));
+      return;
+    }
+    const config = {
+      url,
+      apiKey,
+      ...(relayFallbackUrl.trim() && relayFallbackApiKey.trim()
+        ? { fallbacks: [{ url: relayFallbackUrl.trim(), apiKey: relayFallbackApiKey.trim() }] }
+        : {}),
+    };
+    await pendingRelayStore.current.save(config);
+    setRelayConfig(config);
+    await scan(pendingRelayQr, config);
   };
 
   const confirm = async (): Promise<void> => {
@@ -179,6 +220,19 @@ export function PairingFlow({
               )}
             </View>
           )
+        ) : null}
+
+        {state === 'relay_setup' ? (
+          <View style={styles.center}>
+            <Text style={styles.muted}>{t('通过私人 Relay 配对')}</Text>
+            <TextInput autoCapitalize="none" autoCorrect={false} onChangeText={setRelayUrl} placeholder="wss://relay.example.com/v1/relay" value={relayUrl} style={styles.relayInput} />
+            <TextInput autoCapitalize="none" autoCorrect={false} onChangeText={setRelayApiKey} placeholder="ck_live_…" secureTextEntry value={relayApiKey} style={styles.relayInput} />
+            <TextInput autoCapitalize="none" autoCorrect={false} onChangeText={setRelayFallbackUrl} placeholder={t('备用 Relay 地址（可选）')} value={relayFallbackUrl} style={styles.relayInput} />
+            <TextInput autoCapitalize="none" autoCorrect={false} onChangeText={setRelayFallbackApiKey} placeholder={t('备用 Relay API Key（可选）')} secureTextEntry value={relayFallbackApiKey} style={styles.relayInput} />
+            <Pressable accessibilityRole="button" onPress={() => { void saveRelayAndContinue(); }} style={({ pressed }) => [styles.action, pressed ? styles.pressed : null]}>
+              <Text style={styles.actionText}>{t('保存并继续')}</Text>
+            </Pressable>
+          </View>
         ) : null}
 
         {state === 'connecting' ? (
@@ -292,6 +346,15 @@ function createStyles(theme: ConnectTheme) {
       justifyContent: 'center',
     },
     actionText: { color: theme.colors.text, fontSize: 15, fontWeight: '600' },
+    relayInput: {
+      width: '90%',
+      minHeight: 46,
+      borderWidth: 1,
+      borderColor: theme.colors.line,
+      borderRadius: RADIUS.control,
+      color: theme.colors.text,
+      paddingHorizontal: SPACE.x3,
+    },
     pressed: { backgroundColor: theme.colors.panel2 },
     sasContent: { flex: 1, padding: SPACE.x6, alignItems: 'center', justifyContent: 'center', gap: SPACE.x5 },
     sasHeading: { alignItems: 'center', gap: SPACE.x2 },

@@ -6,6 +6,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import {
@@ -149,6 +150,8 @@ export function SettingsScreen({
   publicAppInfo,
   onOpenPublicLink,
   onBack,
+  relay,
+  onRelayChange,
 }: {
   state: SessionViewModel;
   presentedConnection?: ConnectionState;
@@ -169,6 +172,8 @@ export function SettingsScreen({
   onOpenPublicLink?(kind: PublicLinkKind): Promise<void>;
   /** 设置从首页右上角进入，是一层页面而不是 tab：返回回到首页（安卓硬件返回同此）。 */
   onBack?(): void;
+  relay?: { url: string; apiKey: string } | null;
+  onRelayChange?(config: { url: string; apiKey: string } | null): Promise<void>;
 }): React.ReactElement {
   const styles = createStyles(theme);
   const insets = useSafeAreaInsets();
@@ -190,6 +195,8 @@ export function SettingsScreen({
     : t('连接后确认');
   const [publicLinkPending, setPublicLinkPending] = useState<PublicLinkKind | null>(null);
   const [publicLinkError, setPublicLinkError] = useState<string | null>(null);
+  const [relayUrl, setRelayUrl] = useState(relay?.url ?? '');
+  const [relayApiKey, setRelayApiKey] = useState(relay?.apiKey ?? '');
 
   const openPublicLink = async (kind: PublicLinkKind): Promise<void> => {
     if (
@@ -218,6 +225,21 @@ export function SettingsScreen({
         { text: t('解除绑定'), style: 'destructive', onPress: onUnpair },
       ],
     );
+  };
+
+  const saveRelay = async (): Promise<void> => {
+    if (!onRelayChange) return;
+    const url = relayUrl.trim();
+    const apiKey = relayApiKey.trim();
+    if (!url && !apiKey) {
+      await onRelayChange(null);
+      return;
+    }
+    if (!/^wss:\/\//u.test(url) || !/^ck_live_[A-Za-z0-9_-]{32,140}$/u.test(apiKey)) {
+      Alert.alert(t('无法保存'), t('请输入 wss:// 地址和有效的 Relay API Key。'));
+      return;
+    }
+    await onRelayChange({ url, apiKey });
   };
 
   return (
@@ -356,6 +378,31 @@ export function SettingsScreen({
         </MotionPressable>
         {advancedOpen ? (
           <>
+            {onRelayChange ? (
+              <SettingsSection icon={ExternalLink} title={t('外网 Relay')} theme={theme}>
+                <Text style={styles.inlineError}>{t('关闭 Tailscale 后通过自己的服务器连接')}</Text>
+                <TextInput
+                  value={relayUrl}
+                  onChangeText={setRelayUrl}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="wss://relay.example.com/v1/relay"
+                  style={styles.relayInput}
+                />
+                <TextInput
+                  value={relayApiKey}
+                  onChangeText={setRelayApiKey}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  secureTextEntry
+                  placeholder="ck_live_…"
+                  style={styles.relayInput}
+                />
+                <MotionPressable accessibilityRole="button" onPress={() => void saveRelay()} style={styles.relaySave}>
+                  <Text style={styles.relaySaveLabel}>{t('保存 Relay')}</Text>
+                </MotionPressable>
+              </SettingsSection>
+            ) : null}
             <SettingsSection icon={SquareTerminal} title={t('终端显示')} theme={theme}>
               <SettingsSelect
                 description={t('终端里文字的字体')}
@@ -720,6 +767,24 @@ function createStyles(theme: ConnectTheme) {
     },
     avatarFallbackText: { color: theme.colors.text2, fontSize: 16, fontWeight: '700' },
     inlineError: { color: theme.colors.danger, fontSize: 12, lineHeight: 18, paddingVertical: SPACE.x2 },
+    relayInput: {
+      minHeight: 44,
+      borderWidth: 1,
+      borderColor: theme.colors.line,
+      borderRadius: RADIUS.control,
+      color: theme.colors.text,
+      backgroundColor: theme.colors.panel,
+      paddingHorizontal: SPACE.x2,
+      marginBottom: SPACE.x2,
+    },
+    relaySave: {
+      minHeight: 44,
+      borderRadius: RADIUS.control,
+      backgroundColor: theme.colors.panel2,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    relaySaveLabel: { color: theme.colors.text, fontSize: 14, fontWeight: '700' },
     segmentedControl: {
       minHeight: 52,
       padding: SPACE.x1,

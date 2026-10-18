@@ -739,6 +739,13 @@ export interface PtyAgentState {
 
 export type MobileScope = 'read' | 'write';
 
+export interface MobileRelayProfile {
+  url: string;
+  ticket: string;
+  apiKey: string;
+  fallbacks?: Array<{ url: string; apiKey: string }>;
+}
+
 export const MOBILE_PROTOCOL_VERSION = 2 as const;
 
 export type MobileErrorCategory = 'retryable' | 'action_required' | 'permanent' | 'ambiguous';
@@ -758,6 +765,8 @@ export interface MobilePairResult {
   desktopIdentityPubKey: string;
   /** 配对时恒为 ['read']；提权到 write 是桌面上的独立显式操作 */
   scopes: ['read'];
+  /** Opaque per-device Relay credential, delivered only inside the encrypted pairing channel. */
+  relayCredential?: string;
 }
 
 /** 配对码与密钥确认已通过；手机收到后才显示本机算出的 SAS。 */
@@ -1383,6 +1392,8 @@ export interface MobileDeviceRecord {
   scopes: MobileScope[];
   /** 软删除：留时间戳供审计，但行为上等同不存在 */
   revokedAt: string | null;
+  /** Opaque Relay credential for this device; never exposed to renderer/audit. */
+  relayCredential?: string;
 }
 
 /** 移动桥运行状态（renderer 视图）。 */
@@ -1415,6 +1426,11 @@ export interface MobilePairingQr {
   /** 配对码签发时刻（epoch ms），供 UI 算 90 秒倒计时 */
   issuedAtMs: number;
   expiresInMs: number;
+  /** Relay pairing descriptor; absent on the legacy LAN/Tailscale QR path. */
+  relay?: {
+    url: string;
+    ticket: string;
+  };
 }
 
 /** 设备列表项（renderer 视图）。指纹截断到前 8 位由 UI 决定，这里给完整值。 */

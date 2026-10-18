@@ -49,13 +49,20 @@ the dev launcher to retain that permission text in Release builds.
 Connect prefers a concrete Tailscale `100.64.0.0/10` address so the Mac and
 iPhone can pair and reconnect away from the same LAN. Without Tailscale it
 falls back to a concrete RFC1918 LAN address. Public addresses, wildcard
-listeners, other VPN tunnel addresses, Funnel, public tunnels, relays, and NAT
-port mapping remain rejected.
+listeners, other VPN tunnel addresses, Funnel, and NAT port mapping remain rejected.
 
 The bridge remains default-off and applies the same pairing, AEAD, device
 scope, Workspace Trust, capability, epoch, rate-limit, and audit checks on
 both paths. If the preferred address changes while the bridge is enabled,
 turn **手机远程** off and on once, then generate a new pairing code.
+
+An already paired desktop can also use a user-owned Connect Relay without
+Tailscale. The Relay profile is stored in the phone's device-protected
+SecureStore and contains only a `wss://` endpoint, an opaque rendezvous ticket,
+and the Relay API Key. The mobile bridge still performs the normal desktop
+handshake, SAS/device checks, AEAD framing, scope checks, ownership epoch and
+Workspace Trust checks after the Relay peer is found. The Relay only forwards
+opaque frames.
 
 ## Pairing and access
 

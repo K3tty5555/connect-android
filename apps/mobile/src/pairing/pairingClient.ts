@@ -10,6 +10,7 @@ import {
   x25519PublicKeyFromSpki,
   x25519PublicKeyToSpki,
 } from '../net/protocolCrypto';
+import { relayTicketForDevice } from '../net/relayTransport';
 import {
   MOBILE_PROTOCOL_VERSION,
   type PairedDesktopProfile,
@@ -28,6 +29,13 @@ export interface PairingQrPayload {
   desktopIdentityPubKey: string;
   issuedAtMs: number;
   expiresInMs: number;
+  relay?: { url: string; ticket: string };
+}
+
+export interface PairingRelayConfig {
+  url: string;
+  apiKey: string;
+  fallbacks?: Array<{ url: string; apiKey: string }>;
 }
 
 export interface PairingIdentity {
@@ -79,11 +87,21 @@ export function parsePairingQr(raw: string, nowMs = Date.now()): PairingQrPayloa
     );
   }
   const keys = Object.keys(value);
+  const relay = value.relay;
+  const relayValid = relay === undefined || (
+    isObject(relay)
+    && Object.keys(relay).length === 2
+    && typeof relay.url === 'string'
+    && /^wss:\/\//u.test(relay.url)
+    && relay.url.length <= 512
+    && typeof relay.ticket === 'string'
+    && /^rt_[A-Za-z0-9_-]{24,96}$/u.test(relay.ticket)
+  );
   if (
-    keys.length !== 8
+    (keys.length !== 8 && keys.length !== 9)
     || !keys.every((key) => [
       'v', 'host', 'port', 'pairingCode', 'desktopEphemeralPubKey', 'desktopIdentityPubKey',
-      'issuedAtMs', 'expiresInMs',
+      'issuedAtMs', 'expiresInMs', 'relay',
     ].includes(key))
     || value.v !== MOBILE_PROTOCOL_VERSION
     || typeof value.host !== 'string'
@@ -99,6 +117,7 @@ export function parsePairingQr(raw: string, nowMs = Date.now()): PairingQrPayloa
     || !Number.isInteger(value.expiresInMs)
     || (value.expiresInMs as number) <= 0
     || (value.expiresInMs as number) > 90_000
+    || !relayValid
   ) {
     throw new PairingError('invalid_qr', '这不是 Connect 配对二维码。');
   }
@@ -148,6 +167,8 @@ export class PairingClient {
   private mobileConfirmed = false;
   private readonly generation = new GenerationGuard();
   private connectionTimer: ReturnType<typeof setTimeout> | null = null;
+  private relayConfig: PairingRelayConfig | null = null;
+  private relayCredential: string | null = null;
 
   state: PairingState = 'idle';
 
@@ -162,7 +183,7 @@ export class PairingClient {
     this.onState = options.onState;
   }
 
-  async start(rawQr: string, deviceName: string): Promise<string> {
+  async start(rawQr: string, deviceName: string, relayConfig?: PairingRelayConfig): Promise<string> {
     this.cancel();
     const generation = this.generation.capture();
     const qr = parsePairingQr(rawQr, this.now());
@@ -170,6 +191,15 @@ export class PairingClient {
       throw new PairingError('connection_failed', '设备名称无效。');
     }
     this.qr = qr;
+    this.relayConfig = relayConfig ?? null;
+    this.relayCredential = null;
+    if (qr.relay !== undefined && (
+      this.relayConfig === null
+      || this.relayConfig.url !== qr.relay.url
+      || !/^ck_live_[A-Za-z0-9_-]{32,140}$/u.test(this.relayConfig.apiKey)
+    )) {
+      throw new PairingError('connection_failed', '请先在手机上保存这个 Relay 的地址和 API Key。');
+    }
     this.setState('connecting');
     const identity = await this.identity.ensureIdentity();
     if (!this.generation.isCurrent(generation)) {
@@ -196,12 +226,37 @@ export class PairingClient {
         ...requestBase,
         pairingConfirm: computePairingConfirmation(pairingKey, requestBase),
       };
-      const socket = this.socketFactory(`ws://${qr.host}:${qr.port}`);
+      const socket = this.socketFactory(qr.relay?.url ?? `ws://${qr.host}:${qr.port}`);
       this.socket = socket;
+      let relayReady = qr.relay === undefined;
       socket.onopen = () => {
-        if (socket === this.socket) socket.send(JSON.stringify(request));
+        if (socket !== this.socket) return;
+        if (qr.relay && this.relayConfig) {
+          socket.send(JSON.stringify({
+            v: 1,
+            kind: 'join',
+            role: 'mobile',
+            ticket: qr.relay.ticket,
+            apiKey: this.relayConfig.apiKey,
+          }));
+          return;
+        }
+        socket.send(JSON.stringify(request));
       };
-      socket.onmessage = (event) => this.handleMessage(socket, event.data);
+      socket.onmessage = (event) => {
+        if (!relayReady) {
+          try {
+            const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+            if (message.v !== 1 || message.kind !== 'peer') throw new Error('relay handshake rejected');
+            relayReady = true;
+            socket.send(JSON.stringify(request));
+          } catch {
+            this.fail(socket);
+          }
+          return;
+        }
+        this.handleMessage(socket, event.data);
+      };
       socket.onerror = () => {};
       socket.onclose = (event) => this.handleClose(socket, event.code);
     } finally {
@@ -222,7 +277,9 @@ export class PairingClient {
         this.setState('rejected');
         this.rejectPending(new PairingError(
           'connection_failed',
-          '连接电脑超时，请确认 iPhone 和 Mac 已连接 Tailscale 或同一局域网。',
+          this.qr?.relay
+            ? '连接私人 Relay 超时，请检查 Relay 地址、API Key 和服务器状态。'
+            : '连接电脑超时，请确认 iPhone 和 Mac 已连接 Tailscale 或同一局域网。',
         ));
         socket.close(1000, 'pairing connection timeout');
       }, CONNECTION_TIMEOUT_MS);
@@ -259,6 +316,8 @@ export class PairingClient {
     this.qr = null;
     this.sas = null;
     this.desktopResult = null;
+    this.relayConfig = null;
+    this.relayCredential = null;
     this.mobileConfirmed = false;
     this.rejectPending(new PairingError('rejected', '配对已取消。'));
     this.setState('idle');
@@ -298,7 +357,7 @@ export class PairingClient {
       return;
     }
     try {
-      if (!isObject(value) || Object.keys(value).length !== 4 || value.v !== MOBILE_PROTOCOL_VERSION) throw new Error();
+      if (!isObject(value) || (Object.keys(value).length !== 4 && Object.keys(value).length !== 5) || value.v !== MOBILE_PROTOCOL_VERSION) throw new Error();
       const qr = this.qr;
       if (!qr) throw new Error();
       const profile: PairedDesktopProfile = {
@@ -309,6 +368,9 @@ export class PairingClient {
         desktopIdentityPubKey: String(value.desktopIdentityPubKey),
         scopes: value.scopes as ('read' | 'write')[],
       };
+      const relayCredential = value.relayCredential;
+      if (relayCredential !== undefined && (typeof relayCredential !== 'string' || !/^rc_[A-Za-z0-9_-]{32,160}$/u.test(relayCredential))) throw new Error();
+      this.relayCredential = relayCredential ?? null;
       ed25519PublicKeyFromSpki(profile.desktopIdentityPubKey);
       if (
         profile.desktopIdentityPubKey !== qr.desktopIdentityPubKey
@@ -326,9 +388,21 @@ export class PairingClient {
   }
 
   private async finishIfReady(): Promise<void> {
-    const profile = this.desktopResult;
+    let profile = this.desktopResult;
     if (!this.mobileConfirmed || !profile || !this.resultResolve) return;
     try {
+      if (this.qr?.relay && this.relayConfig) {
+        profile = {
+          ...profile,
+          relay: {
+            url: this.relayConfig.url,
+            apiKey: this.relayConfig.apiKey,
+            ticket: await relayTicketForDevice(profile.deviceId, profile.desktopIdentityPubKey),
+            ...(this.relayCredential ? { credential: this.relayCredential } : {}),
+            ...(this.relayConfig.fallbacks && this.relayConfig.fallbacks.length > 0 ? { fallbacks: this.relayConfig.fallbacks } : {}),
+          },
+        };
+      }
       await this.profileStore.save(profile);
       this.setState('paired');
       this.resultResolve(profile);

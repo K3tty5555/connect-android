@@ -31,10 +31,45 @@ export function validatePairedDesktopProfile(value: unknown): PairedDesktopProfi
   }
   const profile = value as Record<string, unknown>;
   const keys = Object.keys(profile);
+  const relay = profile.relay;
+  const relayRecord = typeof relay === 'object' && relay !== null && !Array.isArray(relay)
+    ? relay as Record<string, unknown>
+    : null;
+  const relayFallbacks = relayRecord?.fallbacks;
+  const relayValid = relay === undefined || (
+    relayRecord !== null
+    && (Object.keys(relayRecord).length >= 3 && Object.keys(relayRecord).length <= 5)
+    && typeof relayRecord.url === 'string'
+    && /^wss:\/\//u.test(relayRecord.url)
+    && relayRecord.url.length <= 512
+    && typeof relayRecord.ticket === 'string'
+    && /^rt_[A-Za-z0-9_-]{24,96}$/u.test(relayRecord.ticket)
+    && typeof relayRecord.apiKey === 'string'
+    && /^ck_live_[A-Za-z0-9_-]{32,140}$/u.test(relayRecord.apiKey)
+    && (relayRecord.credential === undefined
+      || (typeof relayRecord.credential === 'string' && /^rc_[A-Za-z0-9_-]{32,160}$/u.test(relayRecord.credential)))
+    && (
+      relayFallbacks === undefined
+      || (
+        Array.isArray(relayFallbacks)
+        && relayFallbacks.length <= 3
+        && relayFallbacks.every((candidate: unknown) => (
+          typeof candidate === 'object' && candidate !== null && !Array.isArray(candidate)
+          && Object.keys(candidate).length === 2
+          && typeof (candidate as Record<string, unknown>).url === 'string'
+          && /^wss:\/\//u.test((candidate as Record<string, unknown>).url as string)
+          && ((candidate as Record<string, unknown>).url as string).length <= 512
+          && typeof (candidate as Record<string, unknown>).apiKey === 'string'
+          && /^ck_live_[A-Za-z0-9_-]{32,140}$/u.test((candidate as Record<string, unknown>).apiKey as string)
+        ))
+      )
+    )
+  );
   if (
-    keys.length !== 6
+    (keys.length !== 6 && keys.length !== 7)
     || !keys.every((key) => [
       'v', 'host', 'port', 'deviceId', 'desktopIdentityPubKey', 'scopes',
+      'relay',
     ].includes(key))
     || profile.v !== 1
     || typeof profile.host !== 'string'
@@ -51,6 +86,7 @@ export function validatePairedDesktopProfile(value: unknown): PairedDesktopProfi
     || !profile.scopes.every((scope) => scope === 'read' || scope === 'write')
     || !profile.scopes.includes('read')
     || new Set(profile.scopes).size !== profile.scopes.length
+    || !relayValid
   ) {
     throw new Error('invalid paired desktop profile');
   }
@@ -93,5 +129,14 @@ export class PairedDesktopStore {
 
   async clear(): Promise<void> {
     await this.secureStore.deleteItemAsync(PROFILE_KEY);
+  }
+
+  async setRelay(relay: NonNullable<PairedDesktopProfile['relay']> | null): Promise<PairedDesktopProfile> {
+    const current = await this.load();
+    if (!current) throw new Error('no paired desktop');
+    const next = relay === null ? { ...current, relay: undefined } : { ...current, relay };
+    if (relay === null) delete (next as { relay?: unknown }).relay;
+    await this.save(next);
+    return next;
   }
 }

@@ -1816,6 +1816,14 @@ export interface PairedDesktopProfile {
   deviceId: string;
   desktopIdentityPubKey: string;
   scopes: readonly ('read' | 'write')[];
+  /** Optional user-owned Relay transport. Presence makes Tailscale unnecessary. */
+  relay?: {
+    url: string;
+    ticket: string;
+    apiKey: string;
+    credential?: string;
+    fallbacks?: Array<{ url: string; apiKey: string }>;
+  };
 }
 
 function samePairedDesktop(
@@ -1945,6 +1953,8 @@ export class BridgeClient {
     retried: boolean;
   } | null = null;
   private socketOpenedAtMs: number | null = null;
+  private relayReady = false;
+  private relayEndpointIndex = 0;
   /** Platform failure text for the dial in flight. Diagnosis only; never persisted. */
   private socketErrorMessage: string | null = null;
   private connectTimedOut = false;
@@ -2059,6 +2069,8 @@ export class BridgeClient {
     this.channel = null;
     this.transcript = null;
     this.socketOpenedAtMs = null;
+    this.relayReady = false;
+    this.relayEndpointIndex = 0;
     this.ptyIngressTimings.clear();
     this.snapshotAssembler.reset();
     this.historyAssembler.reset();
@@ -2477,7 +2489,16 @@ export class BridgeClient {
     this.catalogReadyNotified = false;
     this.performanceTrace.record(operationId, 'connection', 'started');
     this.performanceTrace.record(operationId, 'connection', 'local_feedback');
-    const socket = this.socketFactory(`ws://${profile.host}:${profile.port}`);
+    const relayCandidates = profile.relay === undefined
+      ? []
+      : [
+          { url: profile.relay.url, apiKey: profile.relay.apiKey },
+          ...(profile.relay.fallbacks ?? []),
+        ];
+    const relayEndpoint = relayCandidates.length === 0
+      ? null
+      : relayCandidates[this.relayEndpointIndex % relayCandidates.length];
+    const socket = this.socketFactory(relayEndpoint?.url ?? `ws://${profile.host}:${profile.port}`);
     if (recoveryGeneration !== undefined) {
       this.socketRecoveryGenerations.set(socket, recoveryGeneration);
     }
@@ -2496,11 +2517,37 @@ export class BridgeClient {
       if (socket !== this.socket || this.connectionOperationId !== operationId) return;
       this.performanceTrace.record(operationId, 'connection', 'socket_open');
       this.socketOpenedAtMs = this.now();
-      this.setState('authenticating');
+      if (profile.relay) {
+        this.relayReady = false;
+        socket.send(JSON.stringify({
+          v: 1,
+          kind: 'join',
+          role: 'mobile',
+          ticket: profile.relay.ticket,
+          ...(profile.relay.credential
+            ? { credential: profile.relay.credential }
+            : { apiKey: relayEndpoint?.apiKey ?? profile.relay.apiKey }),
+        }));
+      } else {
+        this.relayReady = true;
+        this.setState('authenticating');
+      }
     };
     socket.onmessage = (event) => {
       const socketReceivedAtMs = this.now();
       this.lastInboundAtMs = socketReceivedAtMs;
+      if (profile.relay && !this.relayReady) {
+        try {
+          const relay = JSON.parse(String(event.data)) as Record<string, unknown>;
+          if (relay.v !== 1 || relay.kind !== 'peer') throw new Error('relay handshake rejected');
+          this.relayReady = true;
+          this.setState('authenticating');
+          return;
+        } catch {
+          this.failClosed(socket, new Error('relay handshake rejected'));
+          return;
+        }
+      }
       this.incoming = this.incoming
         .then(() => this.handleMessage(socket, event.data, socketReceivedAtMs))
         .catch((error: unknown) => this.failClosed(socket, error));
@@ -2583,6 +2630,7 @@ export class BridgeClient {
       // answered, not that the session will last; resetting here is what turned
       // a session that died a second later into a one-per-second storm.
       this.flapGuard.authenticated(this.now());
+      this.relayEndpointIndex = 0;
       this.armInboundWatchdog();
       if (this.socketOpenedAtMs !== null) {
         this.observeRoundTrip(this.now() - this.socketOpenedAtMs);
@@ -2840,6 +2888,7 @@ export class BridgeClient {
       this.connectionOperationId = null;
     }
     const stateAtClose = this.state;
+    const relayWasReady = this.relayReady;
     const recoveryReason = this.nextRecoveryReason
       ?? (stateAtClose === 'confirming' ? 'liveness' : 'socket_close');
     this.nextRecoveryReason = null;
@@ -2862,6 +2911,11 @@ export class BridgeClient {
     this.channel = null;
     this.transcript = null;
     this.socketOpenedAtMs = null;
+    this.relayReady = false;
+    if (this.profile?.relay && !relayWasReady) {
+      const count = 1 + (this.profile.relay.fallbacks?.length ?? 0);
+      this.relayEndpointIndex = (this.relayEndpointIndex + 1) % count;
+    }
     this.ptyIngressTimings.clear();
     this.snapshotAssembler.reset();
     this.historyAssembler.reset();
