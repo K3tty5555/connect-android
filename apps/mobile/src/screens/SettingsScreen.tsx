@@ -197,6 +197,7 @@ export function SettingsScreen({
   const [publicLinkError, setPublicLinkError] = useState<string | null>(null);
   const [relayUrl, setRelayUrl] = useState(relay?.url ?? '');
   const [relayApiKey, setRelayApiKey] = useState(relay?.apiKey ?? '');
+  const [relaySaved, setRelaySaved] = useState(false);
 
   const openPublicLink = async (kind: PublicLinkKind): Promise<void> => {
     if (
@@ -231,15 +232,22 @@ export function SettingsScreen({
     if (!onRelayChange) return;
     const url = relayUrl.trim();
     const apiKey = relayApiKey.trim();
-    if (!url && !apiKey) {
-      await onRelayChange(null);
-      return;
+    try {
+      if (!url && !apiKey) {
+        await onRelayChange(null);
+        setRelaySaved(true);
+        return;
+      }
+      if (!/^wss:\/\//u.test(url) || !/^ck_live_[A-Za-z0-9_-]{32,140}$/u.test(apiKey)) {
+        Alert.alert(t('无法保存'), t('请输入 wss:// 地址和有效的 Relay API Key。'));
+        return;
+      }
+      await onRelayChange({ url, apiKey });
+      setRelaySaved(true);
+    } catch {
+      setRelaySaved(false);
+      Alert.alert(t('无法保存'), t('Relay 保存失败，请重试。'));
     }
-    if (!/^wss:\/\//u.test(url) || !/^ck_live_[A-Za-z0-9_-]{32,140}$/u.test(apiKey)) {
-      Alert.alert(t('无法保存'), t('请输入 wss:// 地址和有效的 Relay API Key。'));
-      return;
-    }
-    await onRelayChange({ url, apiKey });
   };
 
   return (
@@ -383,7 +391,7 @@ export function SettingsScreen({
                 <Text style={styles.inlineError}>{t('关闭 Tailscale 后通过自己的服务器连接')}</Text>
                 <TextInput
                   value={relayUrl}
-                  onChangeText={setRelayUrl}
+                  onChangeText={(value) => { setRelaySaved(false); setRelayUrl(value); }}
                   autoCapitalize="none"
                   autoCorrect={false}
                   placeholder="wss://relay.example.com/v1/relay"
@@ -391,7 +399,7 @@ export function SettingsScreen({
                 />
                 <TextInput
                   value={relayApiKey}
-                  onChangeText={setRelayApiKey}
+                  onChangeText={(value) => { setRelaySaved(false); setRelayApiKey(value); }}
                   autoCapitalize="none"
                   autoCorrect={false}
                   secureTextEntry
@@ -399,7 +407,8 @@ export function SettingsScreen({
                   style={styles.relayInput}
                 />
                 <MotionPressable accessibilityRole="button" onPress={() => void saveRelay()} style={styles.relaySave}>
-                  <Text style={styles.relaySaveLabel}>{t('保存 Relay')}</Text>
+                  {relaySaved ? <Check color={theme.colors.ok} size={16} /> : null}
+                  <Text style={styles.relaySaveLabel}>{relaySaved ? t('Relay 已保存') : t('保存 Relay')}</Text>
                 </MotionPressable>
               </SettingsSection>
             ) : null}
@@ -783,6 +792,8 @@ function createStyles(theme: ConnectTheme) {
       backgroundColor: theme.colors.panel2,
       alignItems: 'center',
       justifyContent: 'center',
+      flexDirection: 'row',
+      gap: SPACE.x2,
     },
     relaySaveLabel: { color: theme.colors.text, fontSize: 14, fontWeight: '700' },
     segmentedControl: {

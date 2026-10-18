@@ -56,7 +56,7 @@ scope, Workspace Trust, capability, epoch, rate-limit, and audit checks on
 both paths. If the preferred address changes while the bridge is enabled,
 turn **手机远程** off and on once, then generate a new pairing code.
 
-An already paired desktop can also use a user-owned Connect Relay without
+An unpaired or already paired desktop can use a user-owned Connect Relay without
 Tailscale. The Relay profile is stored in the phone's device-protected
 SecureStore and contains only a `wss://` endpoint, an opaque rendezvous ticket,
 and the Relay API Key. The mobile bridge still performs the normal desktop

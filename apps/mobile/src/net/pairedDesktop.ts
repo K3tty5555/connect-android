@@ -2,6 +2,7 @@ import * as SecureStore from 'expo-secure-store';
 import type { PairedDesktopProfile } from './bridgeClient';
 import type { SecureStorePort } from './deviceIdentity';
 import { ed25519PublicKeyFromSpki } from './protocolCrypto';
+import { isRelayOnlyPairingHost } from '../../../../src/shared/mobilePairingQrBoundary';
 
 const PROFILE_KEY = 'connect.mobile.paired-desktop.v1';
 const DEVICE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/u;
@@ -73,7 +74,8 @@ export function validatePairedDesktopProfile(value: unknown): PairedDesktopProfi
     ].includes(key))
     || profile.v !== 1
     || typeof profile.host !== 'string'
-    || !isMobileBridgeIpv4(profile.host)
+    || (!isMobileBridgeIpv4(profile.host)
+      && !(relay !== undefined && isRelayOnlyPairingHost(profile.host)))
     || !Number.isInteger(profile.port)
     || (profile.port as number) < 1
     || (profile.port as number) > 65_535

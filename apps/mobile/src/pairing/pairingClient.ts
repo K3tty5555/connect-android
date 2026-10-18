@@ -11,6 +11,7 @@ import {
   x25519PublicKeyToSpki,
 } from '../net/protocolCrypto';
 import { relayTicketForDevice } from '../net/relayTransport';
+import { isRelayOnlyPairingHost } from '../../../../src/shared/mobilePairingQrBoundary';
 import {
   MOBILE_PROTOCOL_VERSION,
   type PairedDesktopProfile,
@@ -80,12 +81,6 @@ export function parsePairingQr(raw: string, nowMs = Date.now()): PairingQrPayloa
         : '电脑上的 Connect 较旧，请先在电脑上更新 Connect。',
     );
   }
-  if (typeof value.host === 'string' && !isMobileBridgeIpv4(value.host)) {
-    throw new PairingError(
-      'invalid_qr',
-      '这不是 Connect 支持的私网配对地址。',
-    );
-  }
   const keys = Object.keys(value);
   const relay = value.relay;
   const relayValid = relay === undefined || (
@@ -105,7 +100,6 @@ export function parsePairingQr(raw: string, nowMs = Date.now()): PairingQrPayloa
     ].includes(key))
     || value.v !== MOBILE_PROTOCOL_VERSION
     || typeof value.host !== 'string'
-    || !isMobileBridgeIpv4(value.host)
     || !Number.isInteger(value.port)
     || (value.port as number) < 1
     || (value.port as number) > 65_535
@@ -120,6 +114,15 @@ export function parsePairingQr(raw: string, nowMs = Date.now()): PairingQrPayloa
     || !relayValid
   ) {
     throw new PairingError('invalid_qr', '这不是 Connect 配对二维码。');
+  }
+  if (
+    !isMobileBridgeIpv4(value.host)
+    && !(relay !== undefined && isRelayOnlyPairingHost(value.host))
+  ) {
+    throw new PairingError(
+      'invalid_qr',
+      '这不是 Connect 支持的配对地址。',
+    );
   }
   try {
     x25519PublicKeyFromSpki(value.desktopEphemeralPubKey);

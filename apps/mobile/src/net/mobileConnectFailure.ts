@@ -1,4 +1,5 @@
 import type { MobileErrorCategory } from './bridgeClient';
+import { isRelayOnlyPairingHost } from '../../../../src/shared/mobilePairingQrBoundary';
 
 /**
  * Why a dial never became a connection. Every dial failure arrives as close
@@ -92,6 +93,11 @@ export function describeMobileConnectFailure(
   kind: MobileConnectFailureKind,
   host: string,
 ): string {
+  if (isRelayOnlyPairingHost(host)) {
+    return kind === 'refused'
+      ? '私人 Relay 已连接，但电脑端 Connect 未接受连接。'
+      : '无法连接私人 Relay，请检查 Relay 地址、API Key 和服务器状态。';
+  }
   switch (kind) {
     case 'unreachable':
       return isTailnetHost(host)

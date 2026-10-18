@@ -11,6 +11,7 @@ import {
   IdentityAccessError,
 } from './deviceIdentity';
 import { isMobileBridgeIpv4 } from './pairedDesktop';
+import { isRelayOnlyPairingHost } from '../../../../src/shared/mobilePairingQrBoundary';
 import {
   MobileConnectFailureError,
   classifyMobileConnectFailure,
@@ -2036,10 +2037,11 @@ export class BridgeClient {
     // An explicit reconnect is the user's own verdict on the connection; it
     // clears the flap run rather than inheriting it.
     this.flapGuard.reset();
-    if (!isMobileBridgeIpv4(profile.host)) {
+    if (!isMobileBridgeIpv4(profile.host)
+      && !(profile.relay !== undefined && isRelayOnlyPairingHost(profile.host))) {
       this.fault = 'fatal';
       this.setState('rejected');
-      this.callbacks.onError?.(new Error('配对资料中的地址不是 Connect 支持的私网地址，请重新配对。'));
+      this.callbacks.onError?.(new Error('配对资料中的地址不是 Connect 支持的配对地址，请重新配对。'));
       return;
     }
     this.open(false);
