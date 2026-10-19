@@ -1408,6 +1408,8 @@ export interface MobileBridgeStatus {
   listening: { host: string; port: number } | null;
   /** Relay-only mode: no local socket is opened; the desktop dials the user's Relay. */
   relayOnly?: boolean;
+  /** A user-owned Relay endpoint is configured; contains no URL credential. */
+  relayConfigured?: boolean;
   /**
    * 正在监听的地址已不再是当前应选的私网地址（典型：Tailscale 晚于 Connect 启动，
    * 桥停在 LAN 回退地址上）。桥**不会**自行改绑——那会让已配对设备的 host 失效——
