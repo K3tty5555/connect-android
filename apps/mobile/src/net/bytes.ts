@@ -45,6 +45,18 @@ export function bytesToText(value: Uint8Array): string {
   return new TextDecoder().decode(value);
 }
 
+/**
+ * WebSocket onmessage 的 data 还原成文本。中转层(用户 Relay 等)可能把桌面发来的
+ * 文本帧当 Buffer 重发成二进制帧,React Native 会把二进制帧投递成 ArrayBuffer;
+ * 协议层只认 string,所以这里按 UTF-8 解回文本。解不了返回 null。
+ */
+export function socketDataToText(data: unknown): string | null {
+  if (typeof data === 'string') return data;
+  if (data instanceof ArrayBuffer) return bytesToText(new Uint8Array(data));
+  if (ArrayBuffer.isView(data)) return bytesToText(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+  return null;
+}
+
 export function uint32be(value: number): Uint8Array {
   if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
     throw new Error('value must fit uint32');

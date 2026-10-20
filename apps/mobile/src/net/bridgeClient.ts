@@ -5,7 +5,7 @@ import {
   aesDecryptAsync,
   aesEncryptAsync,
 } from 'expo-crypto';
-import { base64ToBytes, bytesToBase64, bytesToText, textToBytes } from './bytes';
+import { base64ToBytes, bytesToBase64, bytesToText, socketDataToText, textToBytes } from './bytes';
 import {
   DeviceIdentityStore,
   IdentityAccessError,
@@ -2538,9 +2538,15 @@ export class BridgeClient {
     socket.onmessage = (event) => {
       const socketReceivedAtMs = this.now();
       this.lastInboundAtMs = socketReceivedAtMs;
+      // 中转可能把桌面发来的文本帧重发成二进制帧(RN 投递 ArrayBuffer),先还原再走协议。
+      const text = socketDataToText(event.data);
+      if (text === null) {
+        this.failClosed(socket, new Error('invalid socket message'));
+        return;
+      }
       if (profile.relay && !this.relayReady) {
         try {
-          const relay = JSON.parse(String(event.data)) as Record<string, unknown>;
+          const relay = JSON.parse(text) as Record<string, unknown>;
           if (relay.v !== 1 || relay.kind !== 'peer') throw new Error('relay handshake rejected');
           this.relayReady = true;
           this.setState('authenticating');
@@ -2551,7 +2557,7 @@ export class BridgeClient {
         }
       }
       this.incoming = this.incoming
-        .then(() => this.handleMessage(socket, event.data, socketReceivedAtMs))
+        .then(() => this.handleMessage(socket, text, socketReceivedAtMs))
         .catch((error: unknown) => this.failClosed(socket, error));
     };
     // React Native 0.86.2 dispatches a bare `Event('error')` here and puts the

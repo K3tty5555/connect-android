@@ -11,6 +11,7 @@ import {
   x25519PublicKeyToSpki,
 } from '../net/protocolCrypto';
 import { relayTicketForDevice } from '../net/relayTransport';
+import { socketDataToText } from '../net/bytes';
 import { isRelayOnlyPairingHost } from '../../../../src/shared/mobilePairingQrBoundary';
 import {
   MOBILE_PROTOCOL_VERSION,
@@ -247,9 +248,15 @@ export class PairingClient {
         socket.send(JSON.stringify(request));
       };
       socket.onmessage = (event) => {
+        // 中转可能把文本帧重发成二进制帧(RN 投递 ArrayBuffer),先还原成文本再走协议。
+        const text = socketDataToText(event.data);
+        if (text === null) {
+          this.fail(socket);
+          return;
+        }
         if (!relayReady) {
           try {
-            const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+            const message = JSON.parse(text) as Record<string, unknown>;
             if (message.v === 1 && message.kind === 'error' && typeof message.code === 'string') {
               this.failRelay(socket, message.code);
               return;
@@ -262,7 +269,7 @@ export class PairingClient {
           }
           return;
         }
-        this.handleMessage(socket, event.data);
+        this.handleMessage(socket, text);
       };
       socket.onerror = () => {};
       socket.onclose = (event) => this.handleClose(socket, event.code);
