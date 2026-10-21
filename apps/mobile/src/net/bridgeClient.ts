@@ -136,6 +136,20 @@ export function createMobileRequestId(
  * watchdog that schedules probes, and far inside the desktop's 200s heartbeat
  * timeout, so a slow link can never be mistaken for a dead one.
  */
+/**
+ * 连上 Relay、发出 join 之后等桌面到来的上限。新 Relay 让手机先到先等（Mac 唤醒、Connect 重启
+ * 的那几秒），8 秒拨号上限只管到 join 为止；等满仍没对端就重拨一次，Relay 侧有心跳清理死连接。
+ */
+export const RELAY_PEER_WAIT_MS = 45_000;
+
+/**
+ * 在后台待过这么久再回来，iOS 多半已静默掐断 socket：只发一次短探活（不重试），没回音就重拨；
+ * 常规探活要 2×(5–15)s 才判死（2026-10-20）。socket 还活着时探活成功、连接不动，接管随之保留；
+ * 已经断开的连接无论以哪种关闭码结束，桌面都会收回接管（mobileBridgeServer close → releasePty）。
+ */
+export const LONG_BACKGROUND_MS = 20_000;
+export const QUICK_LIVENESS_PROBE_TIMEOUT_MS = 1_500;
+
 export const LIVENESS_PROBE_MIN_TIMEOUT_MS = 5_000;
 export const LIVENESS_PROBE_MAX_TIMEOUT_MS = 15_000;
 
@@ -2138,14 +2152,21 @@ export class BridgeClient {
    * socket and `usePresentedConnection` hides its 700 ms, so a healthy return
    * still looks seamless while a dead one is caught in seconds.
    */
-  foreground(): void {
+  foreground(backgroundMs?: number): void {
     if (this.profile === null || this.fault === 'fatal') return;
     if (this.suspended) {
       this.revive();
       return;
     }
     if (this.state === 'connected') {
-      void this.confirmLiveness().catch(() => {});
+      const quick = backgroundMs !== undefined && backgroundMs >= LONG_BACKGROUND_MS;
+      void (quick
+        ? this.confirmLiveness(
+          Math.max(QUICK_LIVENESS_PROBE_TIMEOUT_MS, (this.roundTripMs ?? 0) * 3),
+          false,
+        )
+        : this.confirmLiveness()
+      ).catch(() => {});
       return;
     }
     // A dial already in flight is bounded by the connect timeout; restarting it
@@ -2174,14 +2195,17 @@ export class BridgeClient {
     this.startRecovery('foreground', 0);
   }
 
-  async confirmLiveness(timeoutMs = livenessProbeTimeoutMs(this.roundTripMs)): Promise<void> {
+  async confirmLiveness(
+    timeoutMs = livenessProbeTimeoutMs(this.roundTripMs),
+    retry = true,
+  ): Promise<void> {
     if (this.state !== 'connected' || this.livenessProbe !== null) return;
     const requestId = createMobileRequestId();
     this.performanceTrace.record(requestId, 'connection', 'started');
     this.setState('confirming');
     this.performanceTrace.record(requestId, 'connection', 'local_feedback');
     const timer = this.armLivenessDeadline(requestId, timeoutMs);
-    this.livenessProbe = { requestId, timer, sentAtMs: null, retried: false };
+    this.livenessProbe = { requestId, timer, sentAtMs: null, retried: !retry };
     try {
       const socket = this.socket;
       const channel = this.channel;
@@ -2521,6 +2545,14 @@ export class BridgeClient {
       this.socketOpenedAtMs = this.now();
       if (profile.relay) {
         this.relayReady = false;
+        this.clearConnectTimer();
+        this.connectTimer = this.scheduleConnectTimeout(() => {
+          if (socket !== this.socket || this.connectionOperationId !== operationId) return;
+          this.connectTimer = null;
+          this.connectTimedOut = true;
+          this.nextRecoveryReason = 'socket_close';
+          socket.close(1012, 'relay peer wait timeout');
+        }, RELAY_PEER_WAIT_MS);
         socket.send(JSON.stringify({
           v: 1,
           kind: 'join',
@@ -2545,16 +2577,29 @@ export class BridgeClient {
         return;
       }
       if (profile.relay && !this.relayReady) {
-        try {
-          const relay = JSON.parse(text) as Record<string, unknown>;
-          if (relay.v !== 1 || relay.kind !== 'peer') throw new Error('relay handshake rejected');
+        let relay: Record<string, unknown> | null = null;
+        try { relay = JSON.parse(text) as Record<string, unknown>; } catch { relay = null; }
+        if (relay?.v === 1 && relay.kind === 'peer') {
           this.relayReady = true;
+          // 对端到了，握手重新计 8 秒拨号上限。
+          this.clearConnectTimer();
+          this.connectTimer = this.scheduleConnectTimeout(() => {
+            if (socket !== this.socket || this.connectionOperationId !== operationId) return;
+            this.connectTimer = null;
+            this.connectTimedOut = true;
+            this.nextRecoveryReason = 'socket_close';
+            socket.close(1012, 'connect timeout');
+          }, this.connectTimeoutMs);
           this.setState('authenticating');
           return;
-        } catch {
-          this.failClosed(socket, new Error('relay handshake rejected'));
+        }
+        if (relay?.v === 1 && relay.kind === 'error') {
+          // Relay 控制面的拒绝（桌面暂未挂号、旧 Relay 的票过期、名额被占）只说明这会儿没会合上，
+          // 不是桌面的授权拒绝：等随之而来的 close，按普通退避重试，不提示「安全连接异常」。
           return;
         }
+        this.failClosed(socket, new Error('relay handshake rejected'));
+        return;
       }
       this.incoming = this.incoming
         .then(() => this.handleMessage(socket, text, socketReceivedAtMs))
@@ -2936,7 +2981,10 @@ export class BridgeClient {
     // Settle the lifetime for every close, retried or not, so the next session
     // is never judged against a timestamp this one left behind.
     const lifetime = this.flapGuard.closed(this.now());
-    if (!shouldRetryClose({ code: event.code, manual: this.manuallyClosed })) {
+    // Relay 会合阶段（还没见到对端）的 1008 来自 Relay 而不是桌面，按可重试处理（2026-10-20）。
+    const relayControlClose = this.profile?.relay !== undefined && !relayWasReady;
+    if (!(relayControlClose && !this.manuallyClosed && event.code === POLICY_CLOSE)
+      && !shouldRetryClose({ code: event.code, manual: this.manuallyClosed })) {
       this.recoveryOwner.cancel();
       const authorizationRejected = (
         event.code === POLICY_CLOSE

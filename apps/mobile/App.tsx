@@ -3742,11 +3742,10 @@ export default function App(): React.ReactElement {
     if (!current) throw new Error('no paired desktop');
     const next = config === null
       ? await profileStore.setRelay(null)
-      : await profileStore.setRelay({
-          url: config.url,
-          apiKey: config.apiKey,
-          ticket: await relayTicketForDevice(current.deviceId, current.desktopIdentityPubKey),
-        });
+      : await profileStore.updateRelayEndpoint(
+          config,
+          await relayTicketForDevice(current.deviceId, current.desktopIdentityPubKey),
+        );
     setRelayProfile(next.relay ?? null);
     bridge.current?.connect(next);
   };

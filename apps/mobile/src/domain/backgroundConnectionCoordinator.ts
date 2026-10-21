@@ -20,7 +20,7 @@ interface BackgroundConnectionBridge {
    * probing one that only claims to be alive, or pre-empting a frozen backoff.
    * Bookkeeping kept out here could only ever be a guess about its state.
    */
-  foreground(): void;
+  foreground(backgroundMs?: number): void;
 }
 
 export interface BackgroundConnectionCoordinatorOptions {
@@ -43,6 +43,7 @@ export class BackgroundConnectionCoordinator {
   private readonly cancel: NonNullable<BackgroundConnectionCoordinatorOptions['cancel']>;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private deadline: number | null = null;
+  private backgroundedAt: number | null = null;
   private generation = 0;
   private backgrounded = false;
   private suspendedForBackground = false;
@@ -59,7 +60,8 @@ export class BackgroundConnectionCoordinator {
   background(): void {
     if (this.released || this.backgrounded) return;
     this.backgrounded = true;
-    this.deadline = this.now() + this.graceMs;
+    this.backgroundedAt = this.now();
+    this.deadline = this.backgroundedAt + this.graceMs;
     const generation = ++this.generation;
     this.timer = this.schedule(() => {
       if (
@@ -81,6 +83,11 @@ export class BackgroundConnectionCoordinator {
       && this.deadline !== null
       && this.now() >= this.deadline
     );
+    // 离开了多久交给桥：长后台回来 socket 多半已被 iOS 掐断，桥据此用短探活（2026-10-20）。
+    const backgroundMs = this.backgrounded && this.backgroundedAt !== null
+      ? this.now() - this.backgroundedAt
+      : undefined;
+    this.backgroundedAt = null;
     this.backgrounded = false;
     this.deadline = null;
     this.generation += 1;
@@ -92,7 +99,7 @@ export class BackgroundConnectionCoordinator {
       this.suspendedForBackground = true;
       this.bridge.suspend();
     }
-    this.bridge.foreground();
+    this.bridge.foreground(backgroundMs);
     this.suspendedForBackground = false;
   }
 
@@ -100,6 +107,7 @@ export class BackgroundConnectionCoordinator {
     if (this.released) return;
     this.released = true;
     this.backgrounded = false;
+    this.backgroundedAt = null;
     this.deadline = null;
     this.generation += 1;
     if (this.timer !== null) {

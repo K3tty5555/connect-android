@@ -133,6 +133,25 @@ export class PairedDesktopStore {
     await this.secureStore.deleteItemAsync(PROFILE_KEY);
   }
 
+  /**
+   * 设置页改 Relay 地址 / Key：沿用配对时拿到的设备凭据和备用端点（2026-10-20）。此前直接整体替换，
+   * 凭据和备用 Relay 一起丢了，手机只能拿 API Key 加入。
+   */
+  async updateRelayEndpoint(
+    endpoint: { url: string; apiKey: string },
+    ticket: string,
+  ): Promise<PairedDesktopProfile> {
+    const current = await this.load();
+    if (!current) throw new Error('no paired desktop');
+    return this.setRelay({
+      url: endpoint.url,
+      apiKey: endpoint.apiKey,
+      ticket,
+      ...(current.relay?.credential ? { credential: current.relay.credential } : {}),
+      ...(current.relay?.fallbacks ? { fallbacks: current.relay.fallbacks } : {}),
+    });
+  }
+
   async setRelay(relay: NonNullable<PairedDesktopProfile['relay']> | null): Promise<PairedDesktopProfile> {
     const current = await this.load();
     if (!current) throw new Error('no paired desktop');

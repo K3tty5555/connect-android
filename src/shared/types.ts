@@ -1410,6 +1410,9 @@ export interface MobileBridgeStatus {
   relayOnly?: boolean;
   /** A user-owned Relay endpoint is configured; contains no URL credential. */
   relayConfigured?: boolean;
+  /** 已保存的 Relay 地址，供设置页回填；API Key 永不进入 renderer（2026-10-20）。 */
+  relayUrl?: string;
+  relayFallbackUrls?: string[];
   /**
    * 正在监听的地址已不再是当前应选的私网地址（典型：Tailscale 晚于 Connect 启动，
    * 桥停在 LAN 回退地址上）。桥**不会**自行改绑——那会让已配对设备的 host 失效——
