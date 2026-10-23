@@ -825,7 +825,13 @@ export type MobileServerCapability =
   | 'terminal-grid-v1'
   | 'workspace-files-v1'
   | 'workspace-office-preview-v1'
-  | 'panel-states-v1';
+  | 'panel-states-v1'
+  | 'endpoint-sync-v1';
+/** ADR-003 §17：桌面已绑定成功的直连监听；未监听（含 Relay-only）为 null。 */
+export interface MobileBridgeEndpoint {
+  host: string;
+  port: number;
+}
 /** Desktop lamp per panel (MOBILE-SESSION-RUN-STATE-01): red = needs_input/error/unread, yellow = running, green = idle. */
 export type MobilePanelStatus = 'needs_input' | 'error' | 'unread' | 'running' | 'idle';
 export interface MobilePanelState {
@@ -910,6 +916,7 @@ export type MobileCommand =
   | { kind: 'markNotificationsRead'; requestId: string; cursor: number }
   | { kind: 'watchPanelStates'; requestId: string }
   | { kind: 'markPanelRead'; requestId: string; panelId: string }
+  | { kind: 'endpointSync'; requestId: string }
   | { kind: 'getCollaborationProfile'; requestId: string; workspaceCapability: string }
   | {
       kind: 'setCollaborationAvatar';
@@ -1035,6 +1042,7 @@ export type MobileEvent =
     }
   | { kind: 'panelList'; requestId?: string; panels: MobilePanelSummary[] }
   | { kind: 'panelStates'; requestId?: string; panels: MobilePanelState[] }
+  | { kind: 'endpointInfo'; requestId?: string; endpoint: MobileBridgeEndpoint | null }
   | { kind: 'roomList'; requestId?: string; rooms: MobileRoomSummary[] }
   | {
       kind: 'notificationList';

@@ -1304,6 +1304,12 @@ export default function App(): React.ReactElement {
           setWorkspaceFilesSupported(capabilities.workspaceFiles);
           setWorkspaceFilesNeedDesktopUpdate(!capabilities.workspaceFiles && capabilities.answered);
         },
+        onEndpointChanged: (binding, endpoint) => {
+          void profileStore.updateEndpoint(binding, endpoint);
+        },
+        onFallbackCleared: () => {
+          void profileStore.clearFallback();
+        },
         onEvent: (event) => {
           if (workspaceFileTransport.handle(event)) return;
           if (terminalImageTransfer.handle(event)) return;
@@ -2249,7 +2255,10 @@ export default function App(): React.ReactElement {
         lastScreenStore.clear();
         setLastScreen(null);
       }
-      bridge.current?.connect(stored);
+      void profileStore.loadFallback(stored).then((fallback) => {
+        if (!active) return;
+        bridge.current?.connect(stored, fallback);
+      });
       if (AppState.currentState === 'background') bridge.current?.suspend();
     });
     return () => {
@@ -2612,14 +2621,15 @@ export default function App(): React.ReactElement {
     }
     if (intent === 'reconnect') {
       dispatch({ type: 'intent_requested', intent });
-      void profileStore.loadWithStatus().then(({ profile: stored, cleanupReason }) => {
+      void profileStore.loadWithStatus().then(async ({ profile: stored, cleanupReason }) => {
         if (stored === null) {
           if (cleanupReason === 'unsupported_address') {
             throw new Error('配对资料中的地址不是 Connect 支持的私网地址，请重新配对。');
           }
           throw new Error('配对资料不可用，请重新配对。');
         }
-        bridge.current?.connect(stored);
+        const fallback = await profileStore.loadFallback(stored);
+        bridge.current?.connect(stored, fallback);
       }).catch((error: unknown) => {
         setPairingRequired(true);
         setBridgeError(error instanceof Error

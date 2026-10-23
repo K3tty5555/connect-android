@@ -10,7 +10,7 @@ import {
   DeviceIdentityStore,
   IdentityAccessError,
 } from './deviceIdentity';
-import { isMobileBridgeIpv4 } from './pairedDesktop';
+import { isAcceptableDesktopEndpoint, isMobileBridgeIpv4 } from './pairedDesktop';
 import { isRelayOnlyPairingHost } from '../../../../src/shared/mobilePairingQrBoundary';
 import {
   MobileConnectFailureError,
@@ -97,7 +97,10 @@ const MIME_RE = /^[a-z]+\/[a-z0-9.+-]+$/u;
 const CAPABILITY_TOKEN_RE = /^[a-z0-9-]{1,40}$/u;
 const KNOWN_SERVER_CAPABILITIES: readonly MobileServerCapability[] = [
   'terminal-grid-v1', 'workspace-files-v1', 'workspace-office-preview-v1', 'panel-states-v1',
+  'endpoint-sync-v1',
 ];
+/** ADR-003 §17：两次采纳桌面新地址的最小间隔（桌面换址要连续两次 10 秒检查确认，合法变化不会更密）。 */
+const ENDPOINT_UPDATE_MIN_INTERVAL_MS = 5_000;
 const PANEL_STATUSES: readonly MobilePanelState['status'][] = ['needs_input', 'error', 'unread', 'running', 'idle'];
 const FILE_CONTENT_KINDS: readonly MobileFileContentKind[] = [
   'text', 'image', 'pdf', 'audio', 'video', 'office', 'unsupported', 'too_large', 'binary',
@@ -197,6 +200,7 @@ export type MobileCommand =
   | { kind: 'markNotificationsRead'; requestId: string; cursor: number }
   | { kind: 'watchPanelStates'; requestId: string }
   | { kind: 'markPanelRead'; requestId: string; panelId: string }
+  | { kind: 'endpointSync'; requestId: string }
   | { kind: 'getCollaborationProfile'; requestId: string; workspaceCapability: string }
   | {
       kind: 'setCollaborationAvatar';
@@ -325,6 +329,7 @@ export type MobileEvent =
     }
   | { kind: 'panelList'; requestId?: string; panels: MobilePanelSummary[] }
   | { kind: 'panelStates'; requestId?: string; panels: MobilePanelState[] }
+  | { kind: 'endpointInfo'; requestId?: string; endpoint: { host: string; port: number } | null }
   | { kind: 'roomList'; requestId?: string; rooms: MobileRoomSummary[] }
   | {
       kind: 'notificationList';
@@ -1107,6 +1112,11 @@ export class PtyEventSequencer {
   }
 }
 
+/** 参与直连竞速的 host：RFC1918 私网或 Tailscale 100.64/10。192.0.2.x（Relay-only 档案占位）不参与。 */
+function isRaceableDirectHost(host: string): boolean {
+  return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/u.test(host);
+}
+
 export function reconnectDelayMs(attempt: number, baseMs = 500, maxMs = 5_000): number {
   if (!Number.isInteger(attempt) || attempt < 0) throw new Error('invalid reconnect attempt');
   return Math.min(maxMs, baseMs * 2 ** Math.min(attempt, 30));
@@ -1214,6 +1224,23 @@ export function parseMobileEvent(value: unknown): MobileEvent {
           && typeof panel.panelId === 'string'
           && PANEL_ID_RE.test(panel.panelId)
           && (PANEL_STATUSES as readonly unknown[]).includes(panel.status)
+        ))
+      ) return value as unknown as MobileEvent;
+      break;
+    case 'endpointInfo':
+      // 只校验形状；网段白名单在采纳前（observeEndpoint）再用配对同一条规则判。
+      if (
+        exactKeys(value, ['kind', 'requestId', 'endpoint'])
+        && (value.requestId === undefined
+          || (typeof value.requestId === 'string' && REQUEST_ID_RE.test(value.requestId)))
+        && (value.endpoint === null || (
+          isObject(value.endpoint)
+          && exactKeys(value.endpoint, ['host', 'port'])
+          && typeof value.endpoint.host === 'string'
+          && /^[0-9]{1,3}(?:\.[0-9]{1,3}){3}$/u.test(value.endpoint.host)
+          && Number.isInteger(value.endpoint.port)
+          && (value.endpoint.port as number) >= 1
+          && (value.endpoint.port as number) <= 65_535
         ))
       ) return value as unknown as MobileEvent;
       break;
@@ -1896,6 +1923,10 @@ export interface BridgeClientCallbacks {
   /** 桌面能力协商完成（探针 v2，旧桌面回落 v1）。文件 UI 只在 workspaceFiles 为 true 时出现。 */
   /** answered=true 表示桌面确实回答了探针（而非超时）：此时缺能力意味着电脑上的 Connect 需要更新。 */
   onServerCapabilities?(capabilities: { terminalGrid: boolean; workspaceFiles: boolean; answered: boolean }): void;
+  /** ADR-003 §17：桌面告知新地址，手机采纳后回调 App 以持久化。 */
+  onEndpointChanged?(binding: { deviceId: string; desktopIdentityPubKey: string }, endpoint: { host: string; port: number }): void;
+  /** ADR-003 §17：新地址经 L3 认证成功一次，App 可丢弃持久化的回退候选。 */
+  onFallbackCleared?(): void;
   onTerminalRendererResolved?(resolution: {
     requested: TerminalTransportRenderer;
     effective: TerminalTransportRenderer;
@@ -1933,6 +1964,10 @@ export class BridgeClient {
   private readonly callbacks: BridgeClientCallbacks;
   private readonly performanceTrace: MobilePerformanceTrace;
   private socket: SocketLike | null = null;
+  /** 并行拨号（2026-10-22）：尚未转正的直连竞速线。握手先到者转正，其余关闭。 */
+  private readonly raceLosers = new Set<SocketLike>();
+  /** 走 Relay 传输的 socket：只有它们会收到 Relay 控制帧（peer / error）。 */
+  private readonly relaySockets = new WeakSet<SocketLike>();
   private readonly socketRecoveryGenerations = new WeakMap<SocketLike, number>();
   private profile: PairedDesktopProfile | null = null;
   private channel: EncryptedChannel | null = null;
@@ -1982,6 +2017,12 @@ export class BridgeClient {
   private officePreviewCapability = false;
   /** The desktop advertised panel-states-v1 on this connection (MOBILE-SESSION-RUN-STATE-01). */
   private panelStatesCapability = false;
+  private endpointSyncCapability = false;
+  private lastEndpointUpdateAtMs = 0;
+  /** ADR-003 §17 回退候选：桌面换址前的那组地址。新地址认证成功一次即丢弃。 */
+  private fallbackEndpoint: { host: string; port: number } | null = null;
+  /** 本轮拨号是否在试回退候选（仅未配 Relay 的档案使用）。 */
+  private dialingFallback = false;
   private capabilityProbe: {
     promise: Promise<boolean>;
     resolve(supported: boolean): void;
@@ -2036,7 +2077,7 @@ export class BridgeClient {
     );
   }
 
-  connect(profile: PairedDesktopProfile): void {
+  connect(profile: PairedDesktopProfile, fallback?: { host: string; port: number } | null): void {
     const preserveSequence = samePairedDesktop(this.profile, profile);
     this.disconnect(false);
     if (!preserveSequence) {
@@ -2044,6 +2085,11 @@ export class BridgeClient {
       this.roundTripMs = null;
     }
     this.profile = profile;
+    // ADR-003 §17：回退候选随档案一起进来；不合规的值直接丢，不参与拨号。
+    this.fallbackEndpoint = fallback !== undefined
+      ? (fallback !== null && isAcceptableDesktopEndpoint(fallback) ? fallback : null)
+      : this.fallbackEndpoint;
+    this.dialingFallback = false;
     this.manuallyClosed = false;
     this.suspended = false;
     this.reconnectAttempt = 0;
@@ -2081,6 +2127,7 @@ export class BridgeClient {
     }
     this.clearConnectTimer();
     const socket = this.socket;
+    this.abandonRaceLosers();
     this.socket = null;
     this.channel = null;
     this.transcript = null;
@@ -2124,6 +2171,7 @@ export class BridgeClient {
     }
     this.clearConnectTimer();
     const socket = this.socket;
+    this.abandonRaceLosers();
     this.socket = null;
     this.channel = null;
     this.transcript = null;
@@ -2524,11 +2572,18 @@ export class BridgeClient {
     const relayEndpoint = relayCandidates.length === 0
       ? null
       : relayCandidates[this.relayEndpointIndex % relayCandidates.length];
-    const socket = this.socketFactory(relayEndpoint?.url ?? `ws://${profile.host}:${profile.port}`);
+    // ADR-003 §17：有回退候选且本轮在试它时拨旧地址；配了 Relay 的档案由 Relay 兜底，不用回退候选
+    const directTarget = profile.relay === undefined
+      && this.dialingFallback
+      && this.fallbackEndpoint !== null
+      ? this.fallbackEndpoint
+      : profile;
+    const socket = this.socketFactory(relayEndpoint?.url ?? `ws://${directTarget.host}:${directTarget.port}`);
     if (recoveryGeneration !== undefined) {
       this.socketRecoveryGenerations.set(socket, recoveryGeneration);
     }
     this.socket = socket;
+    if (relayEndpoint !== null) this.relaySockets.add(socket);
     this.socketErrorMessage = null;
     this.connectTimedOut = false;
     this.clearConnectTimer();
@@ -2567,6 +2622,26 @@ export class BridgeClient {
         this.setState('authenticating');
       }
     };
+    this.wireProtocolHandlers(socket, profile, operationId, recoveryGeneration);
+    // 并行拨号（2026-10-22 方案）：配了 Relay 且档案 host 是真实私网 / Tailscale 地址时，
+    // 同时拨直连；谁先送来协议握手帧（serverHello）用谁。Relay-only 档案的哑地址不参与。
+    if (relayEndpoint !== null && isRaceableDirectHost(profile.host)) {
+      const sibling = this.socketFactory(`ws://${profile.host}:${profile.port}`);
+      if (recoveryGeneration !== undefined) this.socketRecoveryGenerations.set(sibling, recoveryGeneration);
+      this.raceLosers.add(sibling);
+      sibling.onopen = () => undefined; // 直连无 Relay 控制面：打开后等桌面主动发 serverHello
+      this.wireProtocolHandlers(sibling, profile, operationId, recoveryGeneration);
+    }
+  }
+
+
+  /** open() 的收发接线；并行拨号的直连线复用同一套处理，闭包绑定各自的 socket。 */
+  private wireProtocolHandlers(
+    socket: SocketLike,
+    profile: PairedDesktopProfile,
+    operationId: string,
+    recoveryGeneration: number | undefined,
+  ): void {
     socket.onmessage = (event) => {
       const socketReceivedAtMs = this.now();
       this.lastInboundAtMs = socketReceivedAtMs;
@@ -2576,7 +2651,7 @@ export class BridgeClient {
         this.failClosed(socket, new Error('invalid socket message'));
         return;
       }
-      if (profile.relay && !this.relayReady) {
+      if (this.relaySockets.has(socket) && !this.relayReady) {
         let relay: Record<string, unknown> | null = null;
         try { relay = JSON.parse(text) as Record<string, unknown>; } catch { relay = null; }
         if (relay?.v === 1 && relay.kind === 'peer') {
@@ -2601,6 +2676,8 @@ export class BridgeClient {
         this.failClosed(socket, new Error('relay handshake rejected'));
         return;
       }
+      // 并行拨号：协议帧到达即裁决归属（主线到达→关掉竞速线；竞速线先到→转正）。
+      if (!this.settleRace(socket, operationId)) return;
       this.incoming = this.incoming
         .then(() => this.handleMessage(socket, text, socketReceivedAtMs))
         .catch((error: unknown) => this.failClosed(socket, error));
@@ -2617,6 +2694,45 @@ export class BridgeClient {
     socket.onclose = (event) => this.handleClose(socket, event, recoveryGeneration);
   }
 
+  /**
+   * 并行拨号的裁决：返回 false 表示这帧来自已落败的线，应丢弃。
+   * 主线收到协议帧 → 关掉所有竞速线；竞速线先收到 → 转正为主线、关掉原主线、重计握手时限。
+   */
+  private settleRace(socket: SocketLike, operationId: string): boolean {
+    if (this.connectionOperationId !== operationId) return socket === this.socket;
+    if (socket === this.socket) {
+      this.abandonRaceLosers();
+      return true;
+    }
+    if (!this.raceLosers.has(socket)) return false;
+    this.raceLosers.delete(socket);
+    const previous = this.socket;
+    this.socket = socket;
+    this.abandonRaceLosers();
+    previous?.close(1012, 'raced out');
+    this.armHandshakeTimeout(socket, operationId);
+    this.setState('authenticating');
+    return true;
+  }
+
+  private armHandshakeTimeout(socket: SocketLike, operationId: string): void {
+    this.clearConnectTimer();
+    this.connectTimer = this.scheduleConnectTimeout(() => {
+      if (socket !== this.socket || this.connectionOperationId !== operationId) return;
+      this.connectTimer = null;
+      this.connectTimedOut = true;
+      this.nextRecoveryReason = 'socket_close';
+      socket.close(1012, 'connect timeout');
+    }, this.connectTimeoutMs);
+  }
+
+  /** 一轮拨号结束或胜负已分：未转正的竞速线一律关闭（其 close 事件因不是主线而被忽略）。 */
+  private abandonRaceLosers(): void {
+    for (const loser of this.raceLosers) {
+      this.raceLosers.delete(loser);
+      try { loser.close(1012, 'raced out'); } catch { /* 已关闭 */ }
+    }
+  }
   private async handleMessage(
     socket: SocketLike,
     data: unknown,
@@ -2684,6 +2800,11 @@ export class BridgeClient {
       // a session that died a second later into a one-per-second storm.
       this.flapGuard.authenticated(this.now());
       this.relayEndpointIndex = 0;
+      // ADR-003 §17：当前连接拨的是新地址（本轮没在试回退候选），新地址证实可用 → 丢弃后备
+      if (this.fallbackEndpoint !== null && !this.dialingFallback) {
+        this.fallbackEndpoint = null;
+        this.callbacks.onFallbackCleared?.();
+      }
       this.armInboundWatchdog();
       if (this.socketOpenedAtMs !== null) {
         this.observeRoundTrip(this.now() - this.socketOpenedAtMs);
@@ -2804,6 +2925,10 @@ export class BridgeClient {
         );
         this.connectionOperationId = null;
       }
+    }
+    if (event.kind === 'endpointInfo') {
+      this.observeEndpoint(event);
+      return;
     }
     this.callbacks.onEvent?.(event);
     if (
@@ -2927,6 +3052,15 @@ export class BridgeClient {
     recoveryGeneration?: number,
   ): void {
     if (socket !== this.socket) return;
+    // 并行拨号：主线（多为 Relay）在握手前断了，而直连线还在拨——由直连线顶上，不算这一轮失败。
+    if (this.channel === null && !this.manuallyClosed && this.raceLosers.size > 0 && this.connectionOperationId !== null) {
+      const next = this.raceLosers.values().next().value as SocketLike;
+      this.raceLosers.delete(next);
+      this.socket = next;
+      this.relayReady = false;
+      this.armHandshakeTimeout(next, this.connectionOperationId);
+      return;
+    }
     this.clearConnectTimer();
     if (recoveryGeneration !== undefined) {
       this.recoveryOwner.finish(recoveryGeneration);
@@ -2960,6 +3094,7 @@ export class BridgeClient {
     const failureHost = this.profile?.host ?? '';
     this.socketErrorMessage = null;
     this.connectTimedOut = false;
+    this.abandonRaceLosers();
     this.socket = null;
     this.channel = null;
     this.transcript = null;
@@ -2968,6 +3103,9 @@ export class BridgeClient {
     if (this.profile?.relay && !relayWasReady) {
       const count = 1 + (this.profile.relay.fallbacks?.length ?? 0);
       this.relayEndpointIndex = (this.relayEndpointIndex + 1) % count;
+    } else if (this.profile !== null && this.fallbackEndpoint !== null) {
+      // ADR-003 §17：新地址失败 → 下一轮试旧地址；旧地址也失败 → 回到新地址
+      this.dialingFallback = !this.dialingFallback;
     }
     this.ptyIngressTimings.clear();
     this.snapshotAssembler.reset();
@@ -3046,6 +3184,10 @@ export class BridgeClient {
       if (this.panelStatesCapability) {
         void this.send({ kind: 'watchPanelStates', requestId: createMobileRequestId() }).catch(() => undefined);
       }
+      this.endpointSyncCapability = event.capabilities.includes('endpoint-sync-v1');
+      if (this.endpointSyncCapability) {
+        void this.send({ kind: 'endpointSync', requestId: createMobileRequestId() }).catch(() => undefined);
+      }
       return;
     }
     if (event.requestId === MOBILE_CAPABILITY_PROBE_REQUEST_ID) {
@@ -3101,6 +3243,7 @@ export class BridgeClient {
     this.capabilityProbe = null;
     this.terminalGridCapability = null;
     this.panelStatesCapability = false;
+    this.endpointSyncCapability = false;
     if (probe === null) return;
     this.cancelSchedule(probe.timer);
     probe.resolve(false);
@@ -3111,5 +3254,31 @@ export class BridgeClient {
       return Promise.resolve(this.terminalGridCapability);
     }
     return this.capabilityProbe?.promise ?? Promise.resolve(false);
+  }
+
+  /**
+   * ADR-003 §17：桌面告知新地址。null 忽略；非移动桥白名单地址拒绝；与当前档案相同跳过；
+   * 5 秒内的重复更新限频；否则采纳（更新内存档案的 host/port）并回调 App 以持久化。
+   */
+  private observeEndpoint(event: Extract<MobileEvent, { kind: 'endpointInfo' }>): void {
+    const profile = this.profile;
+    if (profile === null || event.endpoint === null) return;
+    const { host, port } = event.endpoint;
+    if (!isMobileBridgeIpv4(host)) return;
+    if (profile.host === host && profile.port === port) return;
+    const nowMs = this.now();
+    if (this.lastEndpointUpdateAtMs !== 0 && nowMs - this.lastEndpointUpdateAtMs < ENDPOINT_UPDATE_MIN_INTERVAL_MS) {
+      return;
+    }
+    this.lastEndpointUpdateAtMs = nowMs;
+    const previous = { host: profile.host, port: profile.port };
+    // 旧真实地址留作回退候选；占位地址（Relay-only 档案）不留
+    this.fallbackEndpoint = isMobileBridgeIpv4(previous.host) ? previous : null;
+    this.dialingFallback = false;
+    this.profile = { ...profile, host, port };
+    this.callbacks.onEndpointChanged?.(
+      { deviceId: profile.deviceId, desktopIdentityPubKey: profile.desktopIdentityPubKey },
+      { host, port },
+    );
   }
 }
