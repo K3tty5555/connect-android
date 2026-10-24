@@ -13,6 +13,7 @@ export const MOBILE_PUBLIC_APP_INFO = buildPublicAppInfo(
     privacyUrl: process.env.EXPO_PUBLIC_CONNECT_PRIVACY_URL,
     supportUrl: process.env.EXPO_PUBLIC_CONNECT_SUPPORT_URL,
     compatibilityUrl: process.env.EXPO_PUBLIC_CONNECT_COMPATIBILITY_URL,
+    downloadsUrl: process.env.EXPO_PUBLIC_CONNECT_DOWNLOADS_URL,
   },
 );
 

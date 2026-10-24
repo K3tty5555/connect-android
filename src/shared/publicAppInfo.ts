@@ -7,6 +7,7 @@ export const PUBLIC_LINK_KINDS = [
   'privacy',
   'support',
   'compatibility',
+  'downloads',
 ] as const satisfies readonly PublicLinkKind[];
 
 export interface PublicAppInfoBuildInput {
@@ -17,6 +18,7 @@ export interface PublicAppInfoBuildInput {
   privacyUrl?: string | null;
   supportUrl?: string | null;
   compatibilityUrl?: string | null;
+  downloadsUrl?: string | null;
 }
 
 const HOST_PATTERN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))+$/u;
@@ -84,6 +86,7 @@ export function buildPublicAppInfo(
       privacy: publicUrl('privacy', input.privacyUrl, allowedHosts),
       support: publicUrl('support', input.supportUrl, allowedHosts),
       compatibility: publicUrl('compatibility', input.compatibilityUrl, allowedHosts),
+      downloads: publicUrl('downloads', input.downloadsUrl, allowedHosts),
     },
   };
 }

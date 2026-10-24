@@ -71,14 +71,15 @@ export function HomeScreen({
   const workspacePanels = (capability: string) => state.panels.filter(
     (panel) => panel.workspaceCapability === capability,
   );
-  const macDownloadConfigured = publicAppInfo?.links.macDownload !== null
-    && publicAppInfo?.links.macDownload !== undefined;
-  const openMacDownload = async (): Promise<void> => {
-    if (!macDownloadConfigured || !onOpenPublicLink || publicLinkPending) return;
+  // Mac 与 Windows 都有电脑版，统一打开官网下载页（UI-CROSS-PLATFORM-DOWNLOAD-LINKS-1023）。
+  const desktopDownloadConfigured = publicAppInfo?.links.downloads !== null
+    && publicAppInfo?.links.downloads !== undefined;
+  const openDesktopDownload = async (): Promise<void> => {
+    if (!desktopDownloadConfigured || !onOpenPublicLink || publicLinkPending) return;
     setPublicLinkPending(true);
     setPublicLinkError(null);
     try {
-      await onOpenPublicLink('macDownload');
+      await onOpenPublicLink('downloads');
     } catch {
       setPublicLinkError(t('无法打开链接，请重试。'));
     } finally {
@@ -140,22 +141,22 @@ export function HomeScreen({
             <Text style={styles.primaryActionText}>{t('扫描二维码')}</Text>
           </MotionPressable>
           <MotionPressable
-            accessibilityLabel={macDownloadConfigured ? t('下载 Mac 版') : t('Mac 下载尚未配置')}
+            accessibilityLabel={desktopDownloadConfigured ? t('下载电脑版') : t('电脑版下载尚未配置')}
             accessibilityRole="button"
             accessibilityState={{
               busy: publicLinkPending,
-              disabled: !macDownloadConfigured || publicLinkPending,
+              disabled: !desktopDownloadConfigured || publicLinkPending,
             }}
-            disabled={!macDownloadConfigured || publicLinkPending}
-            onPress={() => void openMacDownload()}
+            disabled={!desktopDownloadConfigured || publicLinkPending}
+            onPress={() => void openDesktopDownload()}
             style={[
               styles.secondaryAction,
-              !macDownloadConfigured || publicLinkPending ? styles.disabled : null,
+              !desktopDownloadConfigured || publicLinkPending ? styles.disabled : null,
             ]}
           >
             <Download color={theme.colors.text2} size={18} />
             <Text style={styles.secondaryActionText}>
-              {macDownloadConfigured ? t('下载 Mac 版') : t('Mac 下载尚未配置')}
+              {desktopDownloadConfigured ? t('下载电脑版') : t('电脑版下载尚未配置')}
             </Text>
           </MotionPressable>
           {publicLinkError ? (

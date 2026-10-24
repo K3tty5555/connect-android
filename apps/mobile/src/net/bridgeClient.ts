@@ -148,7 +148,7 @@ export const RELAY_PEER_WAIT_MS = 45_000;
 /**
  * 在后台待过这么久再回来，iOS 多半已静默掐断 socket：只发一次短探活（不重试），没回音就重拨；
  * 常规探活要 2×(5–15)s 才判死（2026-10-20）。socket 还活着时探活成功、连接不动，接管随之保留；
- * 已经断开的连接无论以哪种关闭码结束，桌面都会收回接管（mobileBridgeServer close → releasePty）。
+ * 已经断开的连接，桌面把接管留给这台手机（2026-10-23），重连后 attach 同一终端即以新 epoch 恢复。
  */
 export const LONG_BACKGROUND_MS = 20_000;
 export const QUICK_LIVENESS_PROBE_TIMEOUT_MS = 1_500;

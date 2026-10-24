@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
@@ -21,6 +22,7 @@ import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
 import java.nio.charset.StandardCharsets
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -32,7 +34,8 @@ import kotlin.math.min
  * feed/apply；输入不经此视图（手机端输入由 React 组合键盘走桥的 write 命令）。
  *
  * 排版对齐 iOS（ConnectTerminalView.swift 的 layoutTerminal）：模拟器始终按桌面 PTY 的
- * 列行排版；比容器宽就缩字号直到放下，比容器高就底部对齐（最新行可见）。容器在首选字号下
+ * 列行排版；比容器宽就缩字号，但不低于可读下限 11sp（用户 2026-10-23 拍板），再放不下就让
+ * 画布比容器宽、横向拖动查看；比容器高就底部对齐（最新行可见）。容器在首选字号下
  * 能放下的列行另经 onFit 报给 JS（接管时把 PTY 交给手机的形状）。
  * React Native 不替原生子视图做 measure/layout，子视图的位置尺寸全部在 onLayout 里手算。
  */
@@ -56,6 +59,15 @@ class ConnectTerminalView(context: Context, appContext: AppContext) : ExpoView(c
   private var wheelAtEdges = false
   private var wheelCarry = 0
   private var reportedBrowsing = false
+
+  // 画布比容器宽时向左移出的像素；横向拖动才移动，竖向手势照旧交给终端。
+  private var panX = 0
+  private var maxPanX = 0
+  private var sideways = false
+  private var downX = 0f
+  private var downY = 0f
+  private var lastX = 0f
+  private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
 
   private val onReady by EventDispatcher<Bundle>()
   private val onFit by EventDispatcher<Bundle>()
@@ -90,6 +102,44 @@ class ConnectTerminalView(context: Context, appContext: AppContext) : ExpoView(c
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
     reportFit()
     layoutTerminal()
+  }
+
+  override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+    if (maxPanX <= 0) return false
+    when (ev.actionMasked) {
+      MotionEvent.ACTION_DOWN -> {
+        downX = ev.x
+        downY = ev.y
+        lastX = ev.x
+        sideways = false
+      }
+      MotionEvent.ACTION_MOVE -> {
+        val dx = ev.x - downX
+        val dy = ev.y - downY
+        if (!sideways && abs(dx) > touchSlop && abs(dx) > abs(dy)) {
+          sideways = true
+          lastX = ev.x
+          return true
+        }
+      }
+    }
+    return false
+  }
+
+  override fun onTouchEvent(ev: MotionEvent): Boolean {
+    if (!sideways) return super.onTouchEvent(ev)
+    when (ev.actionMasked) {
+      MotionEvent.ACTION_MOVE -> {
+        val next = min(maxPanX, max(0, panX - (ev.x - lastX).toInt()))
+        lastX = ev.x
+        if (next != panX) {
+          panX = next
+          termView.offsetLeftAndRight(-panX - termView.left)
+        }
+      }
+      MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> sideways = false
+    }
+    return true
   }
 
   // —— Props ——
@@ -161,6 +211,8 @@ class ConnectTerminalView(context: Context, appContext: AppContext) : ExpoView(c
     if (cols < 2 || cols > 500 || rows < 1 || rows > 200) return
     if (geometry == cols to rows) return
     geometry = cols to rows
+    // 换了形状就是新的排版：回到最左边。
+    panX = 0
     layoutTerminal()
   }
 
@@ -228,6 +280,10 @@ class ConnectTerminalView(context: Context, appContext: AppContext) : ExpoView(c
   private fun preferredTextSize(): Int =
     max(6, (preferredFontSize * resources.displayMetrics.density).toInt())
 
+  /** 缩字号的下限（旧 Exact Grid 的 11pt）：再小手机上就看不清了。 */
+  private fun readableTextFloor(): Int =
+    max(6, (min(preferredFontSize, READABLE_FONT_FLOOR) * resources.displayMetrics.density).toInt())
+
   /** 首选字号下容器能放下的列行：手机自己的形状，接管时交给 PTY。 */
   private fun reportFit() {
     if (width <= 0 || height <= 0) return
@@ -244,11 +300,13 @@ class ConnectTerminalView(context: Context, appContext: AppContext) : ExpoView(c
   private fun layoutTerminal() {
     if (width <= 0 || height <= 0) return
     val (cols, rows) = geometry ?: lastFit ?: (80 to 24)
-    // 比容器宽：缩字号到放得下（像素整数步进，测量与 Termux 渲染器同一算法）。
+    // 比容器宽：缩字号到放得下（像素整数步进，测量与 Termux 渲染器同一算法），
+    // 到可读下限为止；剩下的宽度靠横向拖动。
+    val floorSize = readableTextFloor()
     var size = preferredTextSize()
     if (cols * cellAt(size).first > width + 1) {
-      size = max(6, floor(size * width / (cols * cellAt(size).first)).toInt())
-      while (size > 6 && cols * cellAt(size).first > width + 0.5f) size -= 1
+      size = max(floorSize, floor(size * width / (cols * cellAt(size).first)).toInt())
+      while (size > floorSize && cols * cellAt(size).first > width + 0.5f) size -= 1
     }
     if (size != appliedTextSize || typeface !== appliedTypeface) {
       appliedTextSize = size
@@ -268,11 +326,14 @@ class ConnectTerminalView(context: Context, appContext: AppContext) : ExpoView(c
     termView.setFillRows(fill)
     val viewHeight = max(needed, height)
     val y = if (needed > height) height - needed else 0
+    val viewWidth = max(width, ceil(cols * cellAt(size).first.toDouble()).toInt())
+    maxPanX = viewWidth - width
+    panX = min(maxPanX, panX)
     termView.measure(
-      MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(viewWidth, MeasureSpec.EXACTLY),
       MeasureSpec.makeMeasureSpec(viewHeight, MeasureSpec.EXACTLY),
     )
-    termView.layout(0, y, width, y + viewHeight)
+    termView.layout(-panX, y, viewWidth - panX, y + viewHeight)
   }
 
   // —— 会话与主题 ——
@@ -412,6 +473,8 @@ class ConnectTerminalView(context: Context, appContext: AppContext) : ExpoView(c
   companion object {
     /** 与桌面端 altScrollback 同量级的回看行数。 */
     private const val TRANSCRIPT_ROWS = 2000
+    /** 电脑宽度画面缩字号的下限（pt，同 iOS）。 */
+    private const val READABLE_FONT_FLOOR = 11.0
     private val SYMBOL_FALLBACK_ASSETS = listOf(
       "fonts/NotoSansSymbols2-TerminalSubset.ttf",
       "fonts/NotoSansSymbols-TerminalSubset.ttf",

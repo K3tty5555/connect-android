@@ -20,6 +20,7 @@ const publicLinks = {
   privacy: process.env.CONNECT_PUBLIC_PRIVACY_URL || publicLinkDefaults.privacyUrl,
   support: process.env.CONNECT_PUBLIC_SUPPORT_URL || publicLinkDefaults.supportUrl,
   compatibility: process.env.CONNECT_PUBLIC_COMPATIBILITY_URL || publicLinkDefaults.compatibilityUrl,
+  downloads: process.env.CONNECT_PUBLIC_DOWNLOADS_URL || publicLinkDefaults.downloadsUrl,
 };
 
 process.env.EXPO_PUBLIC_CONNECT_VERSION = version || appJson.version;
@@ -30,6 +31,7 @@ process.env.EXPO_PUBLIC_CONNECT_IOS_APP_STORE_URL = publicLinks.iosAppStore || '
 process.env.EXPO_PUBLIC_CONNECT_PRIVACY_URL = publicLinks.privacy || '';
 process.env.EXPO_PUBLIC_CONNECT_SUPPORT_URL = publicLinks.support || '';
 process.env.EXPO_PUBLIC_CONNECT_COMPATIBILITY_URL = publicLinks.compatibility || '';
+process.env.EXPO_PUBLIC_CONNECT_DOWNLOADS_URL = publicLinks.downloads || '';
 
 if (storeBuild) {
   const missing = [

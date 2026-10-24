@@ -393,7 +393,9 @@ export type PublicLinkKind =
   | 'iosAppStore'
   | 'privacy'
   | 'support'
-  | 'compatibility';
+  | 'compatibility'
+  /** 官网四端下载总入口（Mac / Windows / iPhone / Android）。 */
+  | 'downloads';
 
 export interface PublicAppInfo {
   schemaVersion: 1;
@@ -715,6 +717,8 @@ export interface PtyOwnershipState {
   panelId: string;
   owner: 'desktop' | 'mobile';
   epoch: number;
+  /** 持有它的手机已断线，归属未变；回来自动恢复，桌面可随时收回。 */
+  mobileOffline?: true;
 }
 
 /** 终端面板背后 agent 的生命周期状态（contracts/pty-agent-state）。只由 hook 与进程退出推导。 */

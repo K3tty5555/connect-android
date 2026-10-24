@@ -409,10 +409,10 @@ export function reduceSession(
         pendingIntent: null,
       };
     }
-    // A dropped connection loses the terminal on the desktop side: it takes
-    // back whatever the phone held when the socket closes, and the phone never
-    // hears it. Whatever ownership was known is stale until reconciled again;
-    // acting on it re-took nothing, or took a terminal not yet re-attached.
+    // While the phone is away the desktop keeps what it held but refuses its
+    // epoch, and the Mac may take it back meanwhile without the phone hearing
+    // it (2026-10-23). Whatever ownership was known is stale until the next
+    // attach answers it, with a fresh epoch if the terminal is still ours.
     const lost = event.connection === 'reconnecting' || event.connection === 'offline';
     const activeKind = state.panels.find((panel) => panel.panelId === state.activePanelId)?.kind;
     const staleOwnership = lost && activeKind !== undefined && activeKind !== 'collaboration';

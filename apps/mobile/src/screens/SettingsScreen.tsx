@@ -505,13 +505,13 @@ export function SettingsScreen({
             />
           ) : null}
           <PublicLinkRow
-            configured={publicAppInfo?.links.macDownload !== null && publicAppInfo?.links.macDownload !== undefined}
+            configured={publicAppInfo?.links.downloads !== null && publicAppInfo?.links.downloads !== undefined}
             icon={Download}
-            kind="macDownload"
-            label={t('Mac 下载')}
+            kind="downloads"
+            label={t('电脑版下载')}
             pending={publicLinkPending !== null}
             theme={theme}
-            onPress={() => void openPublicLink('macDownload')}
+            onPress={() => void openPublicLink('downloads')}
           />
           <PublicLinkRow
             configured={publicAppInfo?.links.privacy !== null && publicAppInfo?.links.privacy !== undefined}

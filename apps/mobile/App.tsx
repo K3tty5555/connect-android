@@ -132,6 +132,7 @@ import { TerminalGeometryGuard } from './src/terminal/terminalGeometryGuard';
 import { TerminalTranscriptCache } from './src/terminal/terminalTranscriptCache';
 import { TerminalRecoveryCoordinator } from './src/terminal/terminalRecoveryCoordinator';
 import { TerminalPaintDeadline } from './src/terminal/terminalPaintDeadline';
+import { TerminalRendererRetry } from './src/terminal/terminalRendererRetry';
 import { TerminalPayloadRejectionPolicy } from './src/terminal/terminalPayloadRejection';
 import { TerminalSwapCoordinator } from './src/terminal/terminalSwapCoordinator';
 import {
@@ -565,6 +566,13 @@ export default function App(): React.ReactElement {
     },
   });
   const paintDeadline = paintDeadlineRef.current;
+  // 恢复原生终端失败或超时：回到兼容模式并结束转圈（ANDROID-COMPAT-FALLBACK-STUCK-1023）。
+  const fallBackToCompatibilityRendererRef = useRef<((panelId: string | null) => void) | null>(null);
+  const rendererRetryRef = useRef<TerminalRendererRetry | null>(null);
+  rendererRetryRef.current ??= new TerminalRendererRetry({
+    onGiveUp: (panelId) => fallBackToCompatibilityRendererRef.current?.(panelId),
+  });
+  const rendererRetry = rendererRetryRef.current;
   const syncTerminalSwapStatus = (): void => {
     const snapshot = terminalSwap.snapshot();
     setTerminalSwapStatus(
@@ -645,6 +653,7 @@ export default function App(): React.ReactElement {
    * path rather than two that can drift apart.
    */
   const fallBackToCompatibilityRenderer = (panelId: string | null): void => {
+    rendererRetry.cancel();
     setTerminalRendererRetryPending(false);
     setTerminalRendererFallback(true);
     terminalRendererRef.current = 'legacy-webview';
@@ -666,6 +675,7 @@ export default function App(): React.ReactElement {
     setBridgeError('原生终端暂不可用，已切换到兼容模式。');
   };
   failTerminalSwapRef.current = failTerminalSwap;
+  fallBackToCompatibilityRendererRef.current = fallBackToCompatibilityRenderer;
   const forgetPairingRef = useRef<((message: string | null) => Promise<void>) | null>(null);
   const roomComposerImagesRef = useRef(roomComposerImages);
   const terminalComposerImageRef = useRef(terminalComposerImage);
@@ -1078,6 +1088,7 @@ export default function App(): React.ReactElement {
           ) {
             if (connection !== 'confirming') {
               terminalRendererRetryGenerationRef.current += 1;
+              rendererRetry.cancel();
               setTerminalRendererRetryPending(false);
               attachedPanelIdRef.current = null;
               terminalRecovery.releasePending();
@@ -1836,6 +1847,7 @@ export default function App(): React.ReactElement {
               return;
             }
             if (disposition.present === null) return;
+            rendererRetry.painted(event.panelId);
             setTerminalRendererRetryPending(false);
             setTerminalRendererFallback(false);
             // `swapOperationId` decides frame admission and must stay the
@@ -1915,6 +1927,9 @@ export default function App(): React.ReactElement {
             dispatch({ type: 'panel_exited', panelId: event.id });
           } else if (event.kind === 'error' && event.code === 'terminal_grid_unavailable') {
             fallBackToCompatibilityRenderer(event.panelId ?? stateRef.current.activePanelId);
+          } else if (event.kind === 'error' && rendererRetry.rejected(event)) {
+            // The desktop answered the 恢复 attach with a refusal; onGiveUp is
+            // already back on compatibility, which says so itself.
           } else if (event.kind === 'error' && event.code === 'epoch_denied') {
             setBridgeError('控制权已变化，请按当前状态重新操作。');
           } else if (
@@ -2074,6 +2089,7 @@ export default function App(): React.ReactElement {
         onTerminalRendererResolved: ({ effective, reason }) => {
           terminalRendererRef.current = effective;
           if (reason === 'unsupported') {
+            rendererRetry.cancel();
             setTerminalRendererRetryPending(false);
             setTerminalRendererFallback(true);
           }
@@ -2265,6 +2281,7 @@ export default function App(): React.ReactElement {
       active = false;
       clearOwnershipConfirmTimer();
       paintDeadline.clear();
+      rendererRetry.cancel();
       clearRefresh('idle');
       terminalWriteConfirmation.release();
       createdTerminalReconciler.stop();
@@ -3728,8 +3745,10 @@ export default function App(): React.ReactElement {
       attachedPanelIdRef.current = null;
       const operationId = createMobileRequestId();
       beginTerminalSwap(panelId, operationId, true);
+      rendererRetry.begin(panelId, operationId);
       void currentBridge.attach(panelId, true, operationId, 'native-grid').catch(() => {
         if (terminalRendererRetryGenerationRef.current !== retryGeneration) return;
+        rendererRetry.cancel();
         setTerminalRendererRetryPending(false);
         setTerminalRendererFallback(true);
         terminalRendererRef.current = 'legacy-webview';
