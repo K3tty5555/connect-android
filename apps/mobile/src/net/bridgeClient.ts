@@ -97,8 +97,9 @@ const MIME_RE = /^[a-z]+\/[a-z0-9.+-]+$/u;
 const CAPABILITY_TOKEN_RE = /^[a-z0-9-]{1,40}$/u;
 const KNOWN_SERVER_CAPABILITIES: readonly MobileServerCapability[] = [
   'terminal-grid-v1', 'workspace-files-v1', 'workspace-office-preview-v1', 'panel-states-v1',
-  'endpoint-sync-v1',
+  'endpoint-sync-v1', 'surface-order-v1',
 ];
+const SURFACE_KINDS: readonly MobileSurfaceKind[] = ['claude', 'codex', 'shell', 'collaboration'];
 /** ADR-003 §17：两次采纳桌面新地址的最小间隔（桌面换址要连续两次 10 秒检查确认，合法变化不会更密）。 */
 const ENDPOINT_UPDATE_MIN_INTERVAL_MS = 5_000;
 const PANEL_STATUSES: readonly MobilePanelState['status'][] = ['needs_input', 'error', 'unread', 'running', 'idle'];
@@ -201,6 +202,7 @@ export type MobileCommand =
   | { kind: 'watchPanelStates'; requestId: string }
   | { kind: 'markPanelRead'; requestId: string; panelId: string }
   | { kind: 'endpointSync'; requestId: string }
+  | { kind: 'watchSurfaceOrder'; requestId: string }
   | { kind: 'getCollaborationProfile'; requestId: string; workspaceCapability: string }
   | {
       kind: 'setCollaborationAvatar';
@@ -330,6 +332,8 @@ export type MobileEvent =
   | { kind: 'panelList'; requestId?: string; panels: MobilePanelSummary[] }
   | { kind: 'panelStates'; requestId?: string; panels: MobilePanelState[] }
   | { kind: 'endpointInfo'; requestId?: string; endpoint: { host: string; port: number } | null }
+  /** DESKTOP-TOOLBAR-BUTTONS-1025：电脑顶部按钮里可见的内置类型及顺序。 */
+  | { kind: 'surfaceOrder'; requestId?: string; surfaces: MobileSurfaceKind[] }
   | { kind: 'roomList'; requestId?: string; rooms: MobileRoomSummary[] }
   | {
       kind: 'notificationList';
@@ -1227,6 +1231,18 @@ export function parseMobileEvent(value: unknown): MobileEvent {
         ))
       ) return value as unknown as MobileEvent;
       break;
+    case 'surfaceOrder':
+      if (
+        exactKeys(value, ['kind', 'requestId', 'surfaces'])
+        && (value.requestId === undefined
+          || (typeof value.requestId === 'string' && REQUEST_ID_RE.test(value.requestId)))
+        && Array.isArray(value.surfaces)
+        && value.surfaces.length >= 1
+        && value.surfaces.length <= SURFACE_KINDS.length
+        && new Set(value.surfaces).size === value.surfaces.length
+        && value.surfaces.every((surface) => (SURFACE_KINDS as readonly unknown[]).includes(surface))
+      ) return value as unknown as MobileEvent;
+      break;
     case 'endpointInfo':
       // 只校验形状；网段白名单在采纳前（observeEndpoint）再用配对同一条规则判。
       if (
@@ -1923,6 +1939,11 @@ export interface BridgeClientCallbacks {
   /** 桌面能力协商完成（探针 v2，旧桌面回落 v1）。文件 UI 只在 workspaceFiles 为 true 时出现。 */
   /** answered=true 表示桌面确实回答了探针（而非超时）：此时缺能力意味着电脑上的 Connect 需要更新。 */
   onServerCapabilities?(capabilities: { terminalGrid: boolean; workspaceFiles: boolean; answered: boolean }): void;
+  /**
+   * DESKTOP-TOOLBAR-BUTTONS-1025：新建列表的类型与顺序跟随电脑顶部按钮。
+   * null = 本连接的电脑不提供（旧版或未声明），按完整四项显示。
+   */
+  onSurfaceOrder?(surfaces: MobileSurfaceKind[] | null): void;
   /** ADR-003 §17：桌面告知新地址，手机采纳后回调 App 以持久化。 */
   onEndpointChanged?(binding: { deviceId: string; desktopIdentityPubKey: string }, endpoint: { host: string; port: number }): void;
   /** ADR-003 §17：新地址经 L3 认证成功一次，App 可丢弃持久化的回退候选。 */
@@ -2018,6 +2039,7 @@ export class BridgeClient {
   /** The desktop advertised panel-states-v1 on this connection (MOBILE-SESSION-RUN-STATE-01). */
   private panelStatesCapability = false;
   private endpointSyncCapability = false;
+  private surfaceOrderCapability = false;
   private lastEndpointUpdateAtMs = 0;
   /** ADR-003 §17 回退候选：桌面换址前的那组地址。新地址认证成功一次即丢弃。 */
   private fallbackEndpoint: { host: string; port: number } | null = null;
@@ -2930,6 +2952,10 @@ export class BridgeClient {
       this.observeEndpoint(event);
       return;
     }
+    if (event.kind === 'surfaceOrder') {
+      if (this.surfaceOrderCapability) this.callbacks.onSurfaceOrder?.(event.surfaces);
+      return;
+    }
     this.callbacks.onEvent?.(event);
     if (
       (event.kind === 'workspaceList' || event.kind === 'panelList' || event.kind === 'roomList')
@@ -3171,6 +3197,7 @@ export class BridgeClient {
           .catch(() => this.finishCapabilityProbe(false));
         return;
       }
+      this.surfaceOrderCapability = event.capabilities.includes('surface-order-v1');
       this.finishCapabilityProbe(
         event.capabilities.includes('terminal-grid-v1'),
         event.capabilities.includes('workspace-files-v1'),
@@ -3187,6 +3214,10 @@ export class BridgeClient {
       this.endpointSyncCapability = event.capabilities.includes('endpoint-sync-v1');
       if (this.endpointSyncCapability) {
         void this.send({ kind: 'endpointSync', requestId: createMobileRequestId() }).catch(() => undefined);
+      }
+      // 同样按连接订阅；未声明的旧电脑收到未知命令会以 1008 断开，所以只在声明后发。
+      if (this.surfaceOrderCapability) {
+        void this.send({ kind: 'watchSurfaceOrder', requestId: createMobileRequestId() }).catch(() => undefined);
       }
       return;
     }
@@ -3232,6 +3263,7 @@ export class BridgeClient {
     this.workspaceFilesCapability = workspaceFiles;
     this.officePreviewCapability = workspaceFiles && officePreview;
     this.callbacks.onServerCapabilities?.({ terminalGrid: supported, workspaceFiles, answered });
+    if (!this.surfaceOrderCapability) this.callbacks.onSurfaceOrder?.(null);
     if (probe === null) return;
     this.capabilityProbe = null;
     this.cancelSchedule(probe.timer);
@@ -3244,6 +3276,7 @@ export class BridgeClient {
     this.terminalGridCapability = null;
     this.panelStatesCapability = false;
     this.endpointSyncCapability = false;
+    this.surfaceOrderCapability = false;
     if (probe === null) return;
     this.cancelSchedule(probe.timer);
     probe.resolve(false);

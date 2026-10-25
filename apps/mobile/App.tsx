@@ -97,6 +97,7 @@ import {
 } from './src/navigation/catalogPresentation';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { ProjectScreen } from './src/screens/ProjectScreen';
+import { SurfaceOrderContext } from './src/domain/surfaceOrder';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { MOBILE_PUBLIC_APP_INFO, openMobilePublicLink } from './src/publicAppInfo';
 import { RouteTransitionView } from './src/components/RouteTransitionView';
@@ -314,6 +315,8 @@ export default function App(): React.ReactElement {
    * not pass for the current one.
    */
   const [panelStatuses, setPanelStatuses] = useState<Readonly<Record<string, MobilePanelStatus>>>({});
+  /** DESKTOP-TOOLBAR-BUTTONS-1025：新建列表跟随电脑顶部按钮；null = 电脑未提供，显示完整四项。 */
+  const [surfaceOrder, setSurfaceOrder] = useState<readonly SurfaceKind[] | null>(null);
   const [resumeTarget, setResumeTarget] = useState<MobileResumeTarget | null>(null);
   const [resumeLoaded, setResumeLoaded] = useState(false);
   const [preferences, setPreferences] = useState<MobilePreferences>({
@@ -1315,6 +1318,7 @@ export default function App(): React.ReactElement {
           setWorkspaceFilesSupported(capabilities.workspaceFiles);
           setWorkspaceFilesNeedDesktopUpdate(!capabilities.workspaceFiles && capabilities.answered);
         },
+        onSurfaceOrder: (order) => setSurfaceOrder(order),
         onEndpointChanged: (binding, endpoint) => {
           void profileStore.updateEndpoint(binding, endpoint);
         },
@@ -4132,6 +4136,7 @@ export default function App(): React.ReactElement {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <BottomSheetModalProvider>
+        <SurfaceOrderContext.Provider value={surfaceOrder}>
           <ReducedMotionProvider>
             <KeyboardProvider preload={false}>
               <View style={{ flex: 1, backgroundColor: theme.colors.bg }}>
@@ -4261,6 +4266,7 @@ export default function App(): React.ReactElement {
               </View>
             </KeyboardProvider>
           </ReducedMotionProvider>
+        </SurfaceOrderContext.Provider>
         </BottomSheetModalProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

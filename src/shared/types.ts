@@ -456,9 +456,11 @@ export interface WorktreeRefRequest {
 
 export interface PtyCreateRequest {
   schemaVersion: 1;
-  kind: 'claude' | 'codex' | 'shell';
+  kind: 'claude' | 'codex' | 'shell' | 'kimi';
   workspacePath: string;
   worktreeId?: string;
+  /** 自定义按钮 id；仅随 kind 'shell' 出现，命令由主进程按 id 查出。 */
+  customId?: string;
 }
 
 export interface WorktreeRegistryRecord {
@@ -736,6 +738,18 @@ export interface PtyAgentState {
   state: AgentSessionState;
 }
 
+/** contracts/pty-task-title.schema.json：CLI 自己写进终端标题的当前任务（已清洗）；null = 尚未命名。 */
+export interface PtyTaskTitle {
+  panelId: string;
+  taskTitle: string | null;
+}
+
+/** contracts/pty-custom-title-request.schema.json：用户给面板起的名字；null = 清除、恢复自动。 */
+export interface PtyCustomTitleRequest {
+  panelId: string;
+  customTitle: string | null;
+}
+
 /**
  * 移动桥线协议（ADR-003）。这些是 contracts/mobile-*.schema.json 的 TS 投影，
  * schema 是事实来源；改形状必须先改 schema。
@@ -830,7 +844,8 @@ export type MobileServerCapability =
   | 'workspace-files-v1'
   | 'workspace-office-preview-v1'
   | 'panel-states-v1'
-  | 'endpoint-sync-v1';
+  | 'endpoint-sync-v1'
+  | 'surface-order-v1';
 /** ADR-003 §17：桌面已绑定成功的直连监听；未监听（含 Relay-only）为 null。 */
 export interface MobileBridgeEndpoint {
   host: string;
@@ -921,6 +936,7 @@ export type MobileCommand =
   | { kind: 'watchPanelStates'; requestId: string }
   | { kind: 'markPanelRead'; requestId: string; panelId: string }
   | { kind: 'endpointSync'; requestId: string }
+  | { kind: 'watchSurfaceOrder'; requestId: string }
   | { kind: 'getCollaborationProfile'; requestId: string; workspaceCapability: string }
   | {
       kind: 'setCollaborationAvatar';
@@ -1047,6 +1063,8 @@ export type MobileEvent =
   | { kind: 'panelList'; requestId?: string; panels: MobilePanelSummary[] }
   | { kind: 'panelStates'; requestId?: string; panels: MobilePanelState[] }
   | { kind: 'endpointInfo'; requestId?: string; endpoint: MobileBridgeEndpoint | null }
+  /** 桌面顶部按钮中可见的内置类型及顺序（DESKTOP-TOOLBAR-BUTTONS-1025）；不含自定义按钮。 */
+  | { kind: 'surfaceOrder'; requestId?: string; surfaces: MobileSurfaceKind[] }
   | { kind: 'roomList'; requestId?: string; rooms: MobileRoomSummary[] }
   | {
       kind: 'notificationList';
@@ -1543,4 +1561,39 @@ export interface DesktopUpdatePreferences {
   schemaVersion: 1;
   autoCheck: boolean;
   skippedVersion: string | null;
+}
+
+/** 工作区顶部新建按钮配置（contracts/toolbar-buttons.schema.json，DESKTOP-TOOLBAR-BUTTONS-1025）。 */
+/** kimi：预置的 Kimi Code，默认隐藏（用户 2026-10-25 拍板）。 */
+export const TOOLBAR_BUILTIN_IDS = ['claude', 'codex', 'shell', 'collab', 'kimi'] as const;
+export type ToolbarBuiltinId = typeof TOOLBAR_BUILTIN_IDS[number];
+export const TOOLBAR_ICONS = [
+  'terminal', 'kimi', 'deepseek', 'qwen', 'zhipu', 'doubao', 'minimax', 'hunyuan',
+  'gemini', 'openai', 'grok', 'mistral', 'ollama', 'cursor', 'githubcopilot',
+  'codebuddy', 'qoder', 'trae', 'opencode', 'amp', 'cline', 'goose', 'kiro', 'windsurf',
+] as const;
+export type ToolbarIcon = typeof TOOLBAR_ICONS[number];
+/** `custom-` + 8 位小写字母数字 */
+export type ToolbarCustomId = `custom-${string}`;
+export type ToolbarButtonId = ToolbarBuiltinId | ToolbarCustomId;
+
+export interface ToolbarCustomButton {
+  id: ToolbarCustomId;
+  name: string;
+  command: string;
+  icon: ToolbarIcon;
+}
+
+export interface ToolbarButtons {
+  schemaVersion: 1;
+  /** 顺序即显示顺序 */
+  items: Array<{ id: ToolbarButtonId; visible: boolean }>;
+  custom: ToolbarCustomButton[];
+}
+
+/** 「直接开始」草稿文件夹的自建登记（contracts/quick-start-scratch.schema.json）。 */
+export interface QuickStartScratch {
+  schemaVersion: 1;
+  scratchPath: string;
+  createdAt: string;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   StyleSheet,
@@ -26,6 +26,7 @@ import {
   surfaceCreateRowDetail,
   type SurfaceCreateRowDetail,
 } from '../domain/surfaceCreateDetail';
+import { orderedSurfaces, SurfaceOrderContext } from '../domain/surfaceOrder';
 import { useLoadingPresentation } from './useLoadingPresentation';
 import type { ConnectTheme } from '../theme/theme';
 import { RADIUS, SPACE } from '../theme/tokens';
@@ -103,6 +104,7 @@ export function SurfaceCreateSheet({
   const window = useWindowDimensions();
   const reducedMotion = useReducedMotion();
   const styles = createStyles(theme);
+  const surfaces = orderedSurfaces(SURFACES, useContext(SurfaceOrderContext));
   const operation = operationPresentation(status);
   const creationBlocked = operation.busy || status === 'ambiguous';
   // Bands come from the shared loading vocabulary so this wait is described the
@@ -238,7 +240,7 @@ export function SurfaceCreateSheet({
                 <Text style={styles.detail}>{t('正在同步项目')}</Text>
               </View>
             ) : null}
-            {SURFACES.map((surface) => (
+            {surfaces.map((surface) => (
               <MotionPressable
                 accessibilityLabel={t('新建 {label}', { label: t(surface.label) })}
                 accessibilityRole="button"
@@ -278,7 +280,7 @@ export function SurfaceCreateSheet({
             </>
           )}
           primaryEstimatedHeight={
-            72 + SURFACES.length * 56 + (selectedWorkspace === null && preparing ? 44 : 0)
+            72 + surfaces.length * 56 + (selectedWorkspace === null && preparing ? 44 : 0)
             + (error ? 28 : 0)
           }
           reducedMotion={reducedMotion}
