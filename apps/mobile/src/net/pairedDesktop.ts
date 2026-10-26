@@ -189,7 +189,13 @@ export class PairedDesktopStore {
 
   /** 回退候选；不属于这台桌面、格式不对或与当前地址相同都视为没有。 */
   async loadFallback(profile: PairedDesktopProfile): Promise<DesktopEndpoint | null> {
-    const raw = await this.secureStore.getItemAsync(FALLBACK_KEY);
+    // 回退地址只是锦上添花：读不出来（钥匙串暂不可用等）就当没有，不能挡住连接本身。
+    let raw: string | null;
+    try {
+      raw = await this.secureStore.getItemAsync(FALLBACK_KEY);
+    } catch {
+      return null;
+    }
     if (raw === null) return null;
     try {
       const parsed = JSON.parse(raw) as Record<string, unknown>;

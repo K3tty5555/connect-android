@@ -2024,6 +2024,10 @@ export class BridgeClient {
     retried: boolean;
   } | null = null;
   private socketOpenedAtMs: number | null = null;
+  /** 本轮拨号的线是否开过：RTT 计时在认证后会清零，不能拿它判断「从没连上」（内审 2026-10-25）。 */
+  private dialOpened = false;
+  /** 并行拨号的直连线各自的开连时刻：转正时补记为本轮的 socketOpenedAtMs。 */
+  private readonly raceOpenedAtMs = new WeakMap<SocketLike, number>();
   private relayReady = false;
   private relayEndpointIndex = 0;
   /** Platform failure text for the dial in flight. Diagnosis only; never persisted. */
@@ -2154,6 +2158,7 @@ export class BridgeClient {
     this.channel = null;
     this.transcript = null;
     this.socketOpenedAtMs = null;
+    this.dialOpened = false;
     this.relayReady = false;
     this.relayEndpointIndex = 0;
     this.ptyIngressTimings.clear();
@@ -2198,6 +2203,7 @@ export class BridgeClient {
     this.channel = null;
     this.transcript = null;
     this.socketOpenedAtMs = null;
+    this.dialOpened = false;
     this.ptyIngressTimings.clear();
     this.snapshotAssembler.reset();
     this.historyAssembler.reset();
@@ -2620,6 +2626,7 @@ export class BridgeClient {
       if (socket !== this.socket || this.connectionOperationId !== operationId) return;
       this.performanceTrace.record(operationId, 'connection', 'socket_open');
       this.socketOpenedAtMs = this.now();
+      this.dialOpened = true;
       if (profile.relay) {
         this.relayReady = false;
         this.clearConnectTimer();
@@ -2651,7 +2658,17 @@ export class BridgeClient {
       const sibling = this.socketFactory(`ws://${profile.host}:${profile.port}`);
       if (recoveryGeneration !== undefined) this.socketRecoveryGenerations.set(sibling, recoveryGeneration);
       this.raceLosers.add(sibling);
-      sibling.onopen = () => undefined; // 直连无 Relay 控制面：打开后等桌面主动发 serverHello
+      // 直连无 Relay 控制面：打开后等桌面主动发 serverHello。主线（Relay）已先断、由它顶上时，
+      // 开连即进入认证，否则随后的 serverAuth 会被当成加密帧解析而握手失败（内审 2026-10-25）。
+      sibling.onopen = () => {
+        const openedAtMs = this.now();
+        this.raceOpenedAtMs.set(sibling, openedAtMs);
+        if (sibling !== this.socket || this.connectionOperationId !== operationId) return;
+        this.performanceTrace.record(operationId, 'connection', 'socket_open');
+        this.socketOpenedAtMs = openedAtMs;
+        this.dialOpened = true;
+        this.setState('authenticating');
+      };
       this.wireProtocolHandlers(sibling, profile, operationId, recoveryGeneration);
     }
   }
@@ -2674,6 +2691,8 @@ export class BridgeClient {
         return;
       }
       if (this.relaySockets.has(socket) && !this.relayReady) {
+        // 已落败的 Relay 线（直连先完成握手）关闭前仍可能投递 peer：不得改动主线的状态与时限。
+        if (socket !== this.socket) return;
         let relay: Record<string, unknown> | null = null;
         try { relay = JSON.parse(text) as Record<string, unknown>; } catch { relay = null; }
         if (relay?.v === 1 && relay.kind === 'peer') {
@@ -2724,12 +2743,17 @@ export class BridgeClient {
     if (this.connectionOperationId !== operationId) return socket === this.socket;
     if (socket === this.socket) {
       this.abandonRaceLosers();
+      // 直连线送来协议帧：这一轮已不在 Relay 会合阶段，之后的 1008 来自桌面（内审 2026-10-25）。
+      if (!this.relaySockets.has(socket)) this.relayReady = true;
       return true;
     }
     if (!this.raceLosers.has(socket)) return false;
     this.raceLosers.delete(socket);
     const previous = this.socket;
     this.socket = socket;
+    this.relayReady = true;
+    this.socketOpenedAtMs = this.raceOpenedAtMs.get(socket) ?? this.now();
+    this.dialOpened = true;
     this.abandonRaceLosers();
     previous?.close(1012, 'raced out');
     this.armHandshakeTimeout(socket, operationId);
@@ -3084,7 +3108,10 @@ export class BridgeClient {
       this.raceLosers.delete(next);
       this.socket = next;
       this.relayReady = false;
+      this.socketOpenedAtMs = this.raceOpenedAtMs.get(next) ?? null;
+      this.dialOpened = this.socketOpenedAtMs !== null;
       this.armHandshakeTimeout(next, this.connectionOperationId);
+      if (this.socketOpenedAtMs !== null) this.setState('authenticating');
       return;
     }
     this.clearConnectTimer();
@@ -3107,7 +3134,7 @@ export class BridgeClient {
     this.nextRecoveryReason = null;
     const livenessRequestId = this.livenessProbe?.requestId;
     // Read the dial's own outcome before the fields are cleared for the next one.
-    const neverOpened = this.socketOpenedAtMs === null;
+    const neverOpened = !this.dialOpened;
     // A dial that never opened means the desktop never spoke, so `reason` here
     // is the platform's own failure text rather than any application reason.
     const closeReason = typeof event.reason === 'string' && event.reason !== ''
@@ -3125,13 +3152,16 @@ export class BridgeClient {
     this.channel = null;
     this.transcript = null;
     this.socketOpenedAtMs = null;
+    this.dialOpened = false;
     this.relayReady = false;
     if (this.profile?.relay && !relayWasReady) {
       const count = 1 + (this.profile.relay.fallbacks?.length ?? 0);
       this.relayEndpointIndex = (this.relayEndpointIndex + 1) % count;
     } else if (this.profile !== null && this.fallbackEndpoint !== null) {
-      // ADR-003 §17：新地址失败 → 下一轮试旧地址；旧地址也失败 → 回到新地址
-      this.dialingFallback = !this.dialingFallback;
+      // ADR-003 §17：新地址失败 → 下一轮试旧地址；旧地址也失败 → 回到新地址。
+      // 认证过的连接（如采纳新地址前旧地址上的活连接）断开不算拨号失败：下一轮先拨新地址。
+      const sessionLived = stateAtClose === 'connected' || stateAtClose === 'confirming';
+      this.dialingFallback = sessionLived ? false : !this.dialingFallback;
     }
     this.ptyIngressTimings.clear();
     this.snapshotAssembler.reset();

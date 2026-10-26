@@ -72,6 +72,7 @@ import {
   type PairedDesktopProfile,
 } from './src/net/bridgeClient';
 import { MobileConnectFailureError } from './src/net/mobileConnectFailure';
+import { connectStoredProfile } from './src/net/connectStoredProfile';
 import { relayTicketForDevice } from './src/net/relayTransport';
 import { PairingClient } from './src/pairing/pairingClient';
 import { PairingFlow } from './src/pairing/PairingFlow';
@@ -2275,11 +2276,14 @@ export default function App(): React.ReactElement {
         lastScreenStore.clear();
         setLastScreen(null);
       }
-      void profileStore.loadFallback(stored).then((fallback) => {
-        if (!active) return;
-        bridge.current?.connect(stored, fallback);
+      void connectStoredProfile({
+        profile: stored,
+        loadFallback: (profile) => profileStore.loadFallback(profile),
+        isActive: () => active,
+        isBackground: () => AppState.currentState === 'background',
+        connect: (profile, fallback) => bridge.current?.connect(profile, fallback),
+        suspend: () => bridge.current?.suspend(),
       });
-      if (AppState.currentState === 'background') bridge.current?.suspend();
     });
     return () => {
       active = false;
@@ -2649,8 +2653,14 @@ export default function App(): React.ReactElement {
           }
           throw new Error('配对资料不可用，请重新配对。');
         }
-        const fallback = await profileStore.loadFallback(stored);
-        bridge.current?.connect(stored, fallback);
+        await connectStoredProfile({
+          profile: stored,
+          loadFallback: (profile) => profileStore.loadFallback(profile),
+          isActive: () => true,
+          isBackground: () => false,
+          connect: (profile, fallback) => bridge.current?.connect(profile, fallback),
+          suspend: () => undefined,
+        });
       }).catch((error: unknown) => {
         setPairingRequired(true);
         setBridgeError(error instanceof Error
