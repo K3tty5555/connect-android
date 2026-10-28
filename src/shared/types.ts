@@ -406,6 +406,8 @@ export type PublicLinkKind =
   | 'privacy'
   | 'support'
   | 'compatibility'
+  /** 自建中继的图文部署说明（用户 2026-10-28：设置里要让用户找得到怎么配）。 */
+  | 'relay'
   /** 官网四端下载总入口（Mac / Windows / iPhone / Android）。 */
   | 'downloads';
 

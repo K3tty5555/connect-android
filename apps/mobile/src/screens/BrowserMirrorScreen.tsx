@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import {
   ActivityIndicator,
@@ -23,12 +24,16 @@ import {
   type MobileBrowserKeyName,
 } from '../../../../src/shared/mobileBrowserMirror';
 import {
+  browserCenteredPan,
+  browserClampPan,
+  browserDisplayGeometry,
   browserPointerFromTouch,
   browserResumeAction,
   browserWheelFromDrag,
   type BrowserMirrorState,
-  type BrowserMirrorViewState,
+  type DisplayedBrowserFrame,
 } from '../domain/browserMirrorSession';
+import type { BrowserFrameHost } from '../domain/browserFrameHost';
 import type { BrowserLastFrame } from '../domain/browserLastFrame';
 import { t } from '../i18n';
 import type { ConnectTheme } from '../theme/theme';
@@ -38,8 +43,10 @@ import { MotionPressable } from '../components/MotionPressable';
 /**
  * 网页镜像观看器（ADR-003 §19，设计 §5.5）。
  *
- * 默认整页缩小到屏宽；双指缩放与平移只改本地显示，发出的坐标始终是
- * 帧视口的归一化值。操作与终端同规则：先显式接管、epoch、桌面随时收回。
+ * 画面默认**撑满观看区**（cover，2026-10-28 修订）：宽帧贴合高度左右平移、
+ * 高帧贴合宽度上下平移，双指缩放仍只改本地显示。帧本体经 BrowserFrameHost
+ * 直达画面叶子——每帧只重渲这一处，不带动整棵 App 树（否则真机每帧数百毫秒、
+ * 帧率坍缩）。操作与终端同规则：先显式接管、epoch、桌面随时收回。
  * 帧是 JPEG：RN Image 以 data URI 渲染，双端一致、零新依赖。
  */
 
@@ -72,6 +79,8 @@ const KEY_LABELS: ReadonlyArray<{ key: MobileBrowserKeyName; label: string }> = 
 
 export interface BrowserMirrorScreenProps {
   state: BrowserMirrorState;
+  /** 帧通道：画面本体与 Ack 簿记都在这里，不进 App 状态。 */
+  frameHost: BrowserFrameHost;
   theme: ConnectTheme;
   workspaceLabel: string;
   online: boolean;
@@ -87,7 +96,7 @@ export interface BrowserMirrorScreenProps {
    */
   chrome?: 'modal' | 'pane';
   onBack(): void;
-  /** 手机显示完一帧才确认（最多 1 张在途由桌面保证）。 */
+  /** 手机显示完一帧才确认（在途帧数由桌面保证）。 */
   onAckFrame(browserCapability: string, seq: number): void;
   onTakeover(browserCapability: string, currentEpoch: number | undefined): void;
   onNav(browserCapability: string, action: 'back' | 'forward' | 'reload'): void;
@@ -110,8 +119,55 @@ interface GestureTouch {
   pageY: number;
 }
 
+/** 帧叶子：只随 host 的帧重渲（App 树与观看器其余部分不感知每帧变化）。 */
+function FrameImage({
+  frameHost,
+  container,
+  zoom,
+  pan,
+  onDisplayed,
+}: {
+  frameHost: BrowserFrameHost;
+  container: { width: number; height: number };
+  zoom: number;
+  pan: { x: number; y: number };
+  onDisplayed(frame: DisplayedBrowserFrame): void;
+}): React.ReactElement | null {
+  const frame = useSyncExternalStore(
+    frameHost.subscribe,
+    () => frameHost.frame,
+  );
+  if (frame === null || container.width <= 0 || container.height <= 0) return null;
+  const geometry = browserDisplayGeometry({
+    containerWidth: container.width,
+    containerHeight: container.height,
+    encodedWidth: frame.encodedWidth,
+    encodedHeight: frame.encodedHeight,
+  });
+  return (
+    <View
+      style={{
+        width: geometry.width,
+        height: geometry.height,
+        overflow: 'hidden',
+        transform: [{ translateX: pan.x }, { translateY: pan.y }, { scale: zoom }],
+      }}
+    >
+      <Image
+        accessibilityLabel={t('网页画面')}
+        onLoad={() => onDisplayed(frame)}
+        resizeMode="cover"
+        source={{ uri: `data:image/jpeg;base64,${frame.jpegBase64}` }}
+        style={{ width: geometry.width, height: geometry.height }}
+        testID="browser-frame-image"
+      />
+    </View>
+  );
+}
+
 export function BrowserMirrorScreen({
   state,
+  frameHost,
   theme,
   workspaceLabel,
   online,
@@ -130,7 +186,6 @@ export function BrowserMirrorScreen({
   onResume,
 }: BrowserMirrorScreenProps): React.ReactElement {
   const view = state.view;
-  const frame = view?.frame ?? null;
   // 平板壳里顶部由标签条让出、左边是侧栏；只认右和底的安全区（与文件标签页同口径）。
   const safeAreaEdges = chrome === 'pane'
     ? (['right', 'bottom'] as const)
@@ -142,8 +197,13 @@ export function BrowserMirrorScreen({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [draft, setDraft] = useState('');
   const styles = useMemo(() => createStyles(theme), [theme]);
+  // 画面有无只需要翻布尔：观看器因首帧出现/清空才重渲，不为每帧买单。
+  const hasFrame = useSyncExternalStore(
+    frameHost.subscribe,
+    () => frameHost.hasFrame,
+  );
 
-  // 换面板即复位本地缩放：新页面从整页宽度重新看起。
+  // 换面板即复位本地缩放与输入；新页面从撑满观看区重新看起。
   const browserCapability = view?.browserCapability;
   useEffect(() => {
     setZoom(1);
@@ -151,23 +211,21 @@ export function BrowserMirrorScreen({
     setDraft('');
   }, [browserCapability]);
 
-  const baseImage = frame !== null && container.width > 0
-    ? {
-      width: container.width,
-      height: Math.max(1, Math.round(container.width * frame.encodedHeight / Math.max(1, frame.encodedWidth))),
-    }
-    : null;
-
   const controlled = view?.controlledByThisDevice === true && view.epoch !== null;
-  const canInput = controlled && frame !== null && online;
-  const displayedCached = frame === null && cachedFrame !== null;
+  const canInput = controlled && hasFrame && online;
+  const displayedCached = !hasFrame && cachedFrame !== null;
+  // 观看器关掉后 host 可能还留着最后一帧：帧的确认只对当前打开的面板有效。
+  const currentCapabilityRef = useRef<string | null>(view?.browserCapability ?? null);
+  currentCapabilityRef.current = view?.browserCapability ?? null;
 
-  const handleFrameLoad = useCallback((): void => {
-    if (view === null || frame === null || view.phase !== 'live') return;
-    // 同一帧只确认一次：已确认过的序号由状态簿记拦下（域层的 browserFrameAckFor 再兜一层）。
-    if (frame.seq <= view.lastAckedSeq) return;
-    onAckFrame(view.browserCapability, frame.seq);
-  }, [frame, onAckFrame, view]);
+  const handleFrameDisplayed = useCallback((frame: DisplayedBrowserFrame): void => {
+    // 同一帧只确认一次：host 的簿记按序号拦下重复 load。
+    const ack = frameHost.ackForDisplayed();
+    if (ack === null || ack.seq !== frame.seq) return;
+    const bcap = currentCapabilityRef.current;
+    if (bcap === null) return;
+    onAckFrame(bcap, ack.seq);
+  }, [frameHost, onAckFrame]);
 
   // 手势状态走 ref：PanResponder 只建一次，读到的永远是最新值。
   /** 手势层的页面原点：pageX/pageY 换回画面局部坐标用（测试环境无 measure，回 0）。 */
@@ -185,30 +243,52 @@ export function BrowserMirrorScreen({
     dragAccumY: 0,
   });
   const latest = useRef({
-    zoom, pan, baseImage, frame, canInput, view, controlled,
-    onPointer, onWheel, container,
+    zoom, pan, canInput, container, frameHost, controlled, onPointer, onWheel,
+    capability: view?.browserCapability ?? null,
   });
   latest.current = {
-    zoom, pan, baseImage, frame, canInput, view, controlled, onPointer, onWheel, container,
+    zoom, pan, canInput, container, frameHost, controlled, onPointer, onWheel,
+    capability: view?.browserCapability ?? null,
   };
 
+  /** 事件时（而非渲染时）取当前画面几何：帧与容器谁变都以最新值为准。 */
+  const geometryNow = useCallback((): { width: number; height: number } | null => {
+    const current = latest.current;
+    const frame = current.frameHost.frame;
+    if (frame === null || current.container.width <= 0) return null;
+    return browserDisplayGeometry({
+      containerWidth: current.container.width,
+      containerHeight: current.container.height,
+      encodedWidth: frame.encodedWidth,
+      encodedHeight: frame.encodedHeight,
+    });
+  }, []);
+
+  /** 画面比例或观看区尺寸变化时，本地平移回到居中基准（缩放回到 1）。 */
+  const geometryAspect = (() => {
+    const frame = frameHost.frame;
+    if (frame === null || container.width <= 0 || container.height <= 0) return 0;
+    return Math.round((frame.encodedWidth / Math.max(1, frame.encodedHeight)) * 1000) * 1000
+      + Math.round(container.width) * 100 + Math.round(container.height);
+  })();
+  useEffect(() => {
+    setZoom(MIN_ZOOM);
+    const geometry = geometryNow();
+    setPan(geometry === null
+      ? { x: 0, y: 0 }
+      : browserCenteredPan(geometry, { width: container.width, height: container.height }));
+    // geometryAspect 编码了帧比例与容器尺寸；任一变化都重置观看基准。
+  }, [geometryAspect, geometryNow, container.width, container.height]);
+
   const clampPan = (nextPan: { x: number; y: number }, nextZoom: number): { x: number; y: number } => {
-    const image = latest.current.baseImage;
-    const box = latest.current.container;
-    if (image === null || box.width <= 0) return { x: 0, y: 0 };
-    const maxX = Math.min(0, box.width - image.width * nextZoom);
-    const maxY = Math.min(0, box.height - image.height * nextZoom);
-    return {
-      x: Math.max(maxX, Math.min(0, nextPan.x)),
-      y: Math.max(maxY, Math.min(0, nextPan.y)),
-    };
+    return browserClampPan(nextPan, nextZoom, geometryNow(), latest.current.container);
   };
 
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
     onPanResponderGrant: (event) => {
-      const state = gestureRef.current;
+      const gesture = gestureRef.current;
       const surface = surfaceRef.current;
       if (surface !== null && typeof surface.measureInWindow === 'function') {
         surface.measureInWindow((x, y) => {
@@ -218,127 +298,140 @@ export function BrowserMirrorScreen({
       const touches = (event.nativeEvent.touches ?? []) as GestureTouch[];
       if (touches.length >= 2) {
         const [first, second] = touches;
-        state.pinchStartDistance = Math.hypot(
+        gesture.pinchStartDistance = Math.hypot(
           second.pageX - first.pageX, second.pageY - first.pageY,
         ) || 1;
-        state.pinchStartZoom = latest.current.zoom;
-        state.pinchStartPan = { ...latest.current.pan };
-        state.pinchStartMid = {
+        gesture.pinchStartZoom = latest.current.zoom;
+        gesture.pinchStartPan = { ...latest.current.pan };
+        gesture.pinchStartMid = {
           x: (first.pageX + second.pageX) / 2,
           y: (first.pageY + second.pageY) / 2,
         };
-        state.moved = true;
+        gesture.moved = true;
         return;
       }
       const touch = touches[0] ?? (event.nativeEvent as GestureTouch);
-      state.touchStart = { x: touch.pageX, y: touch.pageY };
-      state.moved = false;
-      state.dragAccumX = 0;
-      state.dragAccumY = 0;
-      state.lastWheelAt = event.nativeEvent.timestamp ?? Date.now();
+      gesture.touchStart = { x: touch.pageX, y: touch.pageY };
+      gesture.moved = false;
+      gesture.dragAccumX = 0;
+      gesture.dragAccumY = 0;
+      gesture.lastWheelAt = event.nativeEvent.timestamp ?? Date.now();
     },
     onPanResponderMove: (event) => {
-      const state = gestureRef.current;
+      const gesture = gestureRef.current;
       const touches = (event.nativeEvent.touches ?? []) as GestureTouch[];
       if (touches.length >= 2) {
         const [first, second] = touches;
         const distance = Math.hypot(second.pageX - first.pageX, second.pageY - first.pageY) || 1;
-        const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, state.pinchStartZoom * distance / state.pinchStartDistance));
+        const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, gesture.pinchStartZoom * distance / gesture.pinchStartDistance));
         // 锚住双指中点：缩放围绕手指进行，而不是围绕画面左上角。
         const mid = { x: (first.pageX + second.pageX) / 2, y: (first.pageY + second.pageY) / 2 };
-        const ratio = nextZoom / state.pinchStartZoom;
+        const ratio = nextZoom / gesture.pinchStartZoom;
         const nextPan = {
-          x: mid.x - (state.pinchStartMid.x - state.pinchStartPan.x) * ratio,
-          y: mid.y - (state.pinchStartMid.y - state.pinchStartPan.y) * ratio,
+          x: mid.x - (gesture.pinchStartMid.x - gesture.pinchStartPan.x) * ratio,
+          y: mid.y - (gesture.pinchStartMid.y - gesture.pinchStartPan.y) * ratio,
         };
         setZoom(nextZoom);
         setPan(clampPan(nextPan, nextZoom));
         return;
       }
       const touch = touches[0] ?? (event.nativeEvent as GestureTouch);
-      const dx = touch.pageX - state.touchStart.x;
-      const dy = touch.pageY - state.touchStart.y;
-      if (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX) state.moved = true;
+      const dx = touch.pageX - gesture.touchStart.x;
+      const dy = touch.pageY - gesture.touchStart.y;
+      if (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX) gesture.moved = true;
       const current = latest.current;
       if (current.zoom > 1) {
         // 放大检视时单指只平移本地画面，不向页面发滚轮。
-        setPan(clampPan({ x: current.pan.x + (touch.pageX - state.touchStart.x) - (state.dragAccumX), y: current.pan.y + (touch.pageY - state.touchStart.y) - (state.dragAccumY) }, current.zoom));
-        state.dragAccumX = touch.pageX - state.touchStart.x;
-        state.dragAccumY = touch.pageY - state.touchStart.y;
+        setPan(clampPan({ x: current.pan.x + (touch.pageX - gesture.touchStart.x) - (gesture.dragAccumX), y: current.pan.y + (touch.pageY - gesture.touchStart.y) - (gesture.dragAccumY) }, current.zoom));
+        gesture.dragAccumX = touch.pageX - gesture.touchStart.x;
+        gesture.dragAccumY = touch.pageY - gesture.touchStart.y;
         return;
       }
       if (!current.canInput) return;
-      const image = current.baseImage;
+      const image = geometryNow();
       if (image === null) return;
-      state.dragAccumX = touch.pageX - state.touchStart.x;
-      state.dragAccumY = touch.pageY - state.touchStart.y;
+      gesture.dragAccumX = touch.pageX - gesture.touchStart.x;
+      gesture.dragAccumY = touch.pageY - gesture.touchStart.y;
       const now = event.nativeEvent.timestamp ?? Date.now();
-      if (now - state.lastWheelAt < WHEEL_SEND_INTERVAL_MS) return;
-      state.lastWheelAt = now;
+      if (now - gesture.lastWheelAt < WHEEL_SEND_INTERVAL_MS) return;
+      gesture.lastWheelAt = now;
+      const frame = current.frameHost.frame;
       const wheel = browserWheelFromDrag({
-        dragDownPx: state.dragAccumY,
-        dragRightPx: state.dragAccumX,
+        dragDownPx: gesture.dragAccumY,
+        dragRightPx: gesture.dragAccumX,
         imageWidth: image.width,
         frame: {
-          viewportWidth: current.frame?.viewportWidth ?? 0,
-          viewportHeight: current.frame?.viewportHeight ?? 0,
-          encodedWidth: current.frame?.encodedWidth ?? 0,
-          encodedHeight: current.frame?.encodedHeight ?? 0,
+          viewportWidth: frame?.viewportWidth ?? 0,
+          viewportHeight: frame?.viewportHeight ?? 0,
+          encodedWidth: frame?.encodedWidth ?? 0,
+          encodedHeight: frame?.encodedHeight ?? 0,
         },
       });
-      state.touchStart = { x: touch.pageX, y: touch.pageY };
-      current.onWheel(current.view!.browserCapability, current.frame!.seq, wheel.deltaX, wheel.deltaY);
+      gesture.touchStart = { x: touch.pageX, y: touch.pageY };
+      if (frame !== null && current.capability !== null) {
+        current.onWheel(current.capability, frame.seq, wheel.deltaX, wheel.deltaY);
+      }
     },
     onPanResponderRelease: (event) => {
-      const state = gestureRef.current;
+      const gesture = gestureRef.current;
       const current = latest.current;
       const touches = (event.nativeEvent.touches ?? []) as GestureTouch[];
       if (touches.length > 0) return;
       if (current.zoom > MIN_ZOOM) {
         if (current.zoom < 1.05) {
           setZoom(MIN_ZOOM);
-          setPan({ x: 0, y: 0 });
+          const geometry = geometryNow();
+          setPan(geometry === null
+            ? { x: 0, y: 0 }
+            : browserCenteredPan(geometry, latest.current.container));
         }
         return;
       }
       const touch = (event.nativeEvent as GestureTouch & { touches?: GestureTouch[] }).touches?.[0]
         ?? (event.nativeEvent as GestureTouch);
-      const tapX = touch.pageX ?? state.touchStart.x;
-      const tapY = touch.pageY ?? state.touchStart.y;
-      if (!state.moved) {
+      const tapX = touch.pageX ?? gesture.touchStart.x;
+      const tapY = touch.pageY ?? gesture.touchStart.y;
+      if (!gesture.moved) {
         // 轻点：未接管时什么都不发（操作要先进「操作网页」）。
-        if (!current.canInput || current.baseImage === null) return;
+        if (!current.canInput) return;
+        const image = geometryNow();
+        if (image === null) return;
+        const frame = current.frameHost.frame;
+        if (frame === null) return;
         const origin = surfaceOriginRef.current;
         const pointer = browserPointerFromTouch({
           touchX: tapX - origin.x, touchY: tapY - origin.y,
           scale: current.zoom,
           panX: current.pan.x, panY: current.pan.y,
-          imageWidth: current.baseImage.width, imageHeight: current.baseImage.height,
+          imageWidth: image.width, imageHeight: image.height,
         });
-        current.onPointer(current.view!.browserCapability, current.frame!.seq, 'tap', pointer.x, pointer.y);
+        if (current.capability === null) return;
+        current.onPointer(current.capability, frame.seq, 'tap', pointer.x, pointer.y);
         return;
       }
       // 拖动收尾：把余量一次性送出。
-      if (current.canInput && current.baseImage !== null
-        && (Math.abs(state.dragAccumY) > 2 || Math.abs(state.dragAccumX) > 2)) {
+      const image = geometryNow();
+      const frame = current.frameHost.frame;
+      if (current.canInput && image !== null && frame !== null && current.capability !== null
+        && (Math.abs(gesture.dragAccumY) > 2 || Math.abs(gesture.dragAccumX) > 2)) {
         const wheel = browserWheelFromDrag({
-          dragDownPx: state.dragAccumY,
-          dragRightPx: state.dragAccumX,
-          imageWidth: current.baseImage.width,
+          dragDownPx: gesture.dragAccumY,
+          dragRightPx: gesture.dragAccumX,
+          imageWidth: image.width,
           frame: {
-            viewportWidth: current.frame?.viewportWidth ?? 0,
-            viewportHeight: current.frame?.viewportHeight ?? 0,
-            encodedWidth: current.frame?.encodedWidth ?? 0,
-            encodedHeight: current.frame?.encodedHeight ?? 0,
+            viewportWidth: frame.viewportWidth,
+            viewportHeight: frame.viewportHeight,
+            encodedWidth: frame.encodedWidth,
+            encodedHeight: frame.encodedHeight,
           },
         });
-        current.onWheel(current.view!.browserCapability, current.frame!.seq, wheel.deltaX, wheel.deltaY);
+        current.onWheel(current.capability, frame.seq, wheel.deltaX, wheel.deltaY);
       }
     },
     onPanResponderTerminate: () => {
       gestureRef.current.moved = true;
     },
-  }), [clampPan]);
+  }), [clampPan, geometryNow]);
 
   if (view === null) {
     return (
@@ -359,7 +452,6 @@ export function BrowserMirrorScreen({
   }
 
   const bcap = view.browserCapability;
-  const baseFrameSeq = frame?.seq;
   const canNav = controlled && online;
   const otherDeviceOperating = view.owner === 'mobile' && !view.controlledByThisDevice;
   const pausedOverlay = view.phase === 'paused';
@@ -367,14 +459,16 @@ export function BrowserMirrorScreen({
   const submitDraft = (event: { nativeEvent: { text?: string } }): void => {
     // 事件携带的是输入法上屏后的最终文本，比闭包里的 draft 更权威。
     const value = event.nativeEvent.text ?? draft;
-    if (value.length === 0 || baseFrameSeq === undefined) return;
-    onInsertText(bcap, baseFrameSeq, value);
+    const frame = frameHost.frame;
+    if (value.length === 0 || frame === null) return;
+    onInsertText(bcap, frame.seq, value);
     setDraft('');
   };
 
   const sendKey = (key: MobileBrowserKeyName): void => {
-    if (baseFrameSeq === undefined) return;
-    onKey(bcap, baseFrameSeq, key);
+    const frame = frameHost.frame;
+    if (frame === null) return;
+    onKey(bcap, frame.seq, key);
   };
 
   return (
@@ -420,30 +514,20 @@ export function BrowserMirrorScreen({
         style={styles.frameArea}
         testID="browser-frame-area"
       >
-        {frame !== null && baseImage !== null ? (
+        {hasFrame ? (
           <View
             ref={surfaceRef}
             style={StyleSheet.absoluteFill}
             {...panResponder.panHandlers}
             testID="browser-touch-surface"
           >
-            <View
-              style={{
-                width: baseImage.width,
-                height: baseImage.height,
-                overflow: 'hidden',
-                transform: [{ translateX: pan.x }, { translateY: pan.y }, { scale: zoom }],
-              }}
-            >
-              <Image
-                accessibilityLabel={t('网页画面')}
-                onLoad={handleFrameLoad}
-                resizeMode="contain"
-                source={{ uri: `data:image/jpeg;base64,${frame.jpegBase64}` }}
-                style={{ width: baseImage.width, height: baseImage.height }}
-                testID="browser-frame-image"
-              />
-            </View>
+            <FrameImage
+              container={container}
+              frameHost={frameHost}
+              onDisplayed={handleFrameDisplayed}
+              pan={pan}
+              zoom={zoom}
+            />
           </View>
         ) : displayedCached && cachedFrame !== null ? (
           <View style={StyleSheet.absoluteFill}>
@@ -479,8 +563,9 @@ export function BrowserMirrorScreen({
               // 输入通道：轻点位置送进页面；拿不到触点就送中性的 wheel(0,0) 唤醒。
               const touch = (event.nativeEvent as GestureTouch & { touches?: GestureTouch[] }).touches?.[0]
                 ?? (event.nativeEvent as GestureTouch);
-              const image = baseImage;
+              const image = geometryNow();
               const origin = surfaceOriginRef.current;
+              const frame = frameHost.frame;
               if (typeof touch?.pageX === 'number' && typeof touch?.pageY === 'number' && image !== null) {
                 const pointer = browserPointerFromTouch({
                   touchX: touch.pageX - origin.x, touchY: touch.pageY - origin.y,

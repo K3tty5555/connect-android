@@ -215,7 +215,6 @@ import {
 } from './src/domain/browserLastFrame';
 import { createExpoBrowserLastFrameFile } from './src/domain/expoBrowserLastFrameFile';
 import {
-  browserFrameAckFor,
   browserMirrorErrorPresentation,
   clampBrowserInsertText,
   initialBrowserMirrorState,
@@ -223,7 +222,9 @@ import {
   reduceBrowserMirror,
   type BrowserMirrorAction,
   type BrowserMirrorState,
+  type DisplayedBrowserFrame,
 } from './src/domain/browserMirrorSession';
+import { BrowserFrameHost } from './src/domain/browserFrameHost';
 import { BrowserMirrorScreen } from './src/screens/BrowserMirrorScreen';
 import { bytesToBase64 } from './src/net/bytes';
 import { MOBILE_CAPABILITY_PROBE_V2_REQUEST_ID } from '../../src/shared/types';
@@ -240,6 +241,11 @@ import {
   nativeGridSequenceStepMs,
 } from './src/fixtures/nativeTerminalGridFixture';
 import { STORE_SHOT } from './src/storeShot';
+import {
+  WEBMIRROR_FRAME_A,
+  WEBMIRROR_FRAME_B,
+  WEBMIRROR_FRAME_META,
+} from './src/fixtures/browserMirrorFrames';
 import {
   STORE_SHOT_ROOM,
   STORE_SHOT_SAS,
@@ -284,6 +290,7 @@ function storeShotRoute(): MobileRoute {
     case 'create':
     case 'files':
     case 'web':
+    case 'webmirror':
       return { kind: 'project', workspaceCapability: STORE_SHOT_WORKSPACE };
     default:
       return { kind: 'root', tab: 'home' };
@@ -431,10 +438,31 @@ export default function App(): React.ReactElement {
     // UI 测试的 `web` 场景：桌面目录由夹具供，App 仍然不连任何电脑。
     STORE_SHOT?.scene === 'web'
       ? { ...initialBrowserMirrorState, panels: storeShotBrowserPanels(STORE_SHOT.locale) }
-      : initialBrowserMirrorState,
+      // `webmirror` 场景：直接种一个已打开、已接管的观看器，合成帧流由下面的 effect 推。
+      : STORE_SHOT?.scene === 'webmirror'
+        ? {
+          panels: storeShotBrowserPanels(STORE_SHOT.locale),
+          view: {
+            browserCapability: 'bcap_storeshot_local_preview00',
+            phase: 'live',
+            tier: 'low',
+            pausedReason: null,
+            hasLiveFrame: false,
+            title: storeShotBrowserPanels(STORE_SHOT.locale)[0]?.title ?? '',
+            loading: false,
+            canGoBack: true,
+            canGoForward: false,
+            owner: 'mobile',
+            controlledByThisDevice: true,
+            epoch: 2,
+          },
+        }
+        : initialBrowserMirrorState,
   );
   const browserMirrorRef = useRef(browserMirror);
   browserMirrorRef.current = browserMirror;
+  // 帧通道：画面本体与 Ack 簿记独立于 App 状态（每帧不重渲整棵树）。
+  const browserFrameHostRef = useRef<BrowserFrameHost>(new BrowserFrameHost());
   const [webMirrorSupported, setWebMirrorSupported] = useState(STORE_SHOT?.scene === 'web');
   const [browserNotice, setBrowserNotice] = useState<{ tone: 'info' | 'warn'; text: string } | null>(null);
   const browserNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -449,6 +477,31 @@ export default function App(): React.ReactElement {
   const dispatchBrowserMirror = useCallback((action: BrowserMirrorAction | readonly BrowserMirrorAction[]): void => {
     setBrowserMirror((previous) => reduceBrowserMirror(previous, action));
   }, []);
+
+  // `webmirror` 场景的合成帧流：红蓝交替的帧每 900ms 一张，与真实桥同一入口
+  // （host + frame_active），模拟器截图上可核对「每帧真的渲染」与显示几何。
+  useEffect(() => {
+    if (STORE_SHOT?.scene !== 'webmirror') return;
+    let seq = 0;
+    const timer = setInterval(() => {
+      seq += 1;
+      browserFrameHostRef.current.setFrame({
+        seq,
+        jpegBase64: seq % 2 === 1 ? WEBMIRROR_FRAME_A : WEBMIRROR_FRAME_B,
+        byteLength: 9_718,
+        ...WEBMIRROR_FRAME_META,
+        sharp: false,
+      });
+      const view = browserMirrorRef.current.view;
+      if (view !== null && (!view.hasLiveFrame || view.phase !== 'live')) {
+        dispatchBrowserMirror({
+          type: 'frame_active',
+          browserCapability: view.browserCapability,
+        });
+      }
+    }, 900);
+    return () => clearInterval(timer);
+  }, [dispatchBrowserMirror]);
 
   const showBrowserNotice = useCallback((tone: 'info' | 'warn', text: string): void => {
     setBrowserNotice({ tone, text });
@@ -1139,21 +1192,26 @@ export default function App(): React.ReactElement {
           void forgetPairingRef.current?.('电脑已吊销这台手机的授权，请重新配对。');
         },
         onBrowserFrame: (frame) => {
-          const view = browserMirrorRef.current.view;
-          if (view === null) return;
-          dispatchBrowserMirror({
-            type: 'frame',
-            frame: {
-              seq: frame.header.seq,
-              jpegBase64: bytesToBase64(frame.jpeg),
-              byteLength: frame.jpeg.byteLength,
-              viewportWidth: frame.header.viewportWidth,
-              viewportHeight: frame.header.viewportHeight,
-              encodedWidth: frame.header.encodedWidth,
-              encodedHeight: frame.header.encodedHeight,
-              sharp: frame.header.sharp,
-            },
+          if (browserMirrorRef.current.view === null) return;
+          // 帧本体走独立 host（2026-10-28 整改）：每帧只重渲画面叶子，
+          // App 树只在「推流是否活着」这个低频信号上感知。
+          browserFrameHostRef.current.setFrame({
+            seq: frame.header.seq,
+            jpegBase64: bytesToBase64(frame.jpeg),
+            byteLength: frame.jpeg.byteLength,
+            viewportWidth: frame.header.viewportWidth,
+            viewportHeight: frame.header.viewportHeight,
+            encodedWidth: frame.header.encodedWidth,
+            encodedHeight: frame.header.encodedHeight,
+            sharp: frame.header.sharp,
           });
+          const view = browserMirrorRef.current.view;
+          if (view.phase !== 'live' || !view.hasLiveFrame) {
+            dispatchBrowserMirror({
+              type: 'frame_active',
+              browserCapability: view.browserCapability,
+            });
+          }
         },
         onState: (connection) => {
           if (connection === 'connected') {
@@ -1431,6 +1489,8 @@ export default function App(): React.ReactElement {
             if (event.kind === 'browserList') {
               dispatchBrowserMirror({ type: 'panels_changed', panels: event.panels });
             } else if (event.kind === 'browserViewStarted') {
+              // 新一路流序号重新计数：帧保留垫底，Ack 簿记作废。
+              browserFrameHostRef.current.markStreamRestarted();
               dispatchBrowserMirror({
                 type: 'view_started',
                 browserCapability: event.browserCapability,
@@ -3569,7 +3629,8 @@ export default function App(): React.ReactElement {
   const saveBrowserLastFrame = useCallback((force = false): void => {
     const view = browserMirrorRef.current.view;
     const key = desktopKeyRef.current;
-    if (view === null || key === null || view.frame === null) return;
+    const frame: DisplayedBrowserFrame | null = browserFrameHostRef.current.frame;
+    if (view === null || key === null || frame === null) return;
     const nowMs = Date.now();
     // 逐帧落盘太吵：5 秒一档，关闭观看器时强制一次。
     if (!force && nowMs - browserCacheLastWriteRef.current < 5_000) return;
@@ -3580,19 +3641,19 @@ export default function App(): React.ReactElement {
       desktopKey: key,
       workspaceLabel: entry?.workspaceLabel ?? '',
       title: view.title.length > 0 ? view.title : (entry?.title ?? ' '),
-      jpegBase64: view.frame.jpegBase64,
-      byteLength: view.frame.byteLength,
-      viewportWidth: view.frame.viewportWidth,
-      viewportHeight: view.frame.viewportHeight,
-      encodedWidth: view.frame.encodedWidth,
-      encodedHeight: view.frame.encodedHeight,
+      jpegBase64: frame.jpegBase64,
+      byteLength: frame.byteLength,
+      viewportWidth: frame.viewportWidth,
+      viewportHeight: frame.viewportHeight,
+      encodedWidth: frame.encodedWidth,
+      encodedHeight: frame.encodedHeight,
     }, nowMs);
     if (cached === null) {
       browserLastFrameStore.clear();
       return;
     }
     browserCacheLastWriteRef.current = nowMs;
-    browserCacheFingerprintRef.current = view.frame.seq;
+    browserCacheFingerprintRef.current = frame.seq;
     browserLastFrameStore.save(cached);
   }, [browserLastFrameStore]);
 
@@ -3605,6 +3666,8 @@ export default function App(): React.ReactElement {
         : null,
     );
     browserCacheLastWriteRef.current = 0;
+    // 换面板从干净的帧通道开始（同一面板重开则保留断线保持语义由 close 处理）。
+    browserFrameHostRef.current.reset();
     dispatchBrowserMirror({ type: 'open', browserCapability });
     const client = bridge.current;
     if (client !== null && client.state === 'connected' && client.supportsWebMirror) {
@@ -3621,17 +3684,15 @@ export default function App(): React.ReactElement {
       }
       saveBrowserLastFrame(true);
     }
+    browserFrameHostRef.current.reset();
     dispatchBrowserMirror({ type: 'close' });
   }, [dispatchBrowserMirror, saveBrowserLastFrame]);
 
   const ackBrowserDisplayedFrame = useCallback((browserCapability: string, seq: number): void => {
-    // 域层决定这一帧要不要确认（每帧一次、只在活动流上）。
-    const ack = browserFrameAckFor(browserMirrorRef.current, seq);
-    if (ack === null) return;
-    dispatchBrowserMirror({ type: 'acknowledged', seq });
-    bridge.current?.ackBrowserFrame(ack.browserCapability, ack.seq).catch(() => undefined);
+    // 是否值得确认由 host 的簿记决定（观看器里已拦一次），这里只负责送出去与顺手存档。
+    bridge.current?.ackBrowserFrame(browserCapability, seq).catch(() => undefined);
     saveBrowserLastFrame();
-  }, [dispatchBrowserMirror, saveBrowserLastFrame]);
+  }, [saveBrowserLastFrame]);
 
   const takeoverBrowserMirror = useCallback((browserCapability: string, currentEpoch: number | undefined): void => {
     const client = bridge.current;
@@ -3649,11 +3710,12 @@ export default function App(): React.ReactElement {
     baseFrameSeq: number;
   } | null => {
     const view = browserMirrorRef.current.view;
-    if (view === null || view.epoch === null || view.frame === null) return null;
+    const frame = browserFrameHostRef.current.frame;
+    if (view === null || view.epoch === null || frame === null) return null;
     return {
       browserCapability: view.browserCapability,
       epoch: view.epoch,
-      baseFrameSeq: view.frame.seq,
+      baseFrameSeq: frame.seq,
     };
   };
 
@@ -4697,6 +4759,7 @@ export default function App(): React.ReactElement {
                                 cachedFrame={browserCachedFrame}
                                 canWrite={state.canControlInput}
                                 chrome="pane"
+                                frameHost={browserFrameHostRef.current}
                                 notice={browserNotice}
                                 onAckFrame={ackBrowserDisplayedFrame}
                                 onBack={dismissBrowserMirror}
@@ -4750,6 +4813,7 @@ export default function App(): React.ReactElement {
                     <BrowserMirrorScreen
                       state={browserMirror}
                       theme={theme}
+                      frameHost={browserFrameHostRef.current}
                       workspaceLabel={routeWorkspace?.label ?? ''}
                       online={presentedConnection === 'online'}
                       canWrite={state.canControlInput}

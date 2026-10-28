@@ -7,6 +7,7 @@ export const PUBLIC_LINK_KINDS = [
   'privacy',
   'support',
   'compatibility',
+  'relay',
   'downloads',
 ] as const satisfies readonly PublicLinkKind[];
 
@@ -18,6 +19,7 @@ export interface PublicAppInfoBuildInput {
   privacyUrl?: string | null;
   supportUrl?: string | null;
   compatibilityUrl?: string | null;
+  relayUrl?: string | null;
   downloadsUrl?: string | null;
 }
 
@@ -86,6 +88,7 @@ export function buildPublicAppInfo(
       privacy: publicUrl('privacy', input.privacyUrl, allowedHosts),
       support: publicUrl('support', input.supportUrl, allowedHosts),
       compatibility: publicUrl('compatibility', input.compatibilityUrl, allowedHosts),
+      relay: publicUrl('relay', input.relayUrl, allowedHosts),
       downloads: publicUrl('downloads', input.downloadsUrl, allowedHosts),
     },
   };

@@ -81,6 +81,7 @@ export const TRADITIONAL: Record<string, string> = {
   '隐私政策': '私隱政策',
   '支持': '支援',
   '兼容性': '兼容性',
+  '部署说明': '部署說明',
   '打开': '開啟',
   '尚未配置': '尚未設定',
   '打开{label}': '開啟{label}',

@@ -410,6 +410,16 @@ export function SettingsScreen({
                   {relaySaved ? <Check color={theme.colors.ok} size={16} /> : null}
                   <Text style={styles.relaySaveLabel}>{relaySaved ? t('Relay 已保存') : t('保存 Relay')}</Text>
                 </MotionPressable>
+                {/* 这两栏要填的地址与 Key 来自自建中继；没服务器的人用 Tailscale 即可（用户 2026-10-28）。 */}
+                <PublicLinkRow
+                  configured={publicAppInfo?.links.relay !== null && publicAppInfo?.links.relay !== undefined}
+                  icon={ExternalLink}
+                  kind="relay"
+                  label={t('部署说明')}
+                  pending={publicLinkPending !== null}
+                  theme={theme}
+                  onPress={() => void openPublicLink('relay')}
+                />
               </SettingsSection>
             ) : null}
             <SettingsSection icon={SquareTerminal} title={t('终端显示')} theme={theme}>

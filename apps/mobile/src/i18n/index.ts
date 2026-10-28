@@ -84,6 +84,7 @@ const ENGLISH: Record<string, string> = {
   '隐私政策': 'Privacy Policy',
   '支持': 'Support',
   '兼容性': 'Compatibility',
+  '部署说明': 'Setup guide',
   '打开': 'Open',
   '尚未配置': 'Not configured',
   '打开{label}': 'Open {label}',

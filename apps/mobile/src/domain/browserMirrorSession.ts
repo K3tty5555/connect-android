@@ -39,7 +39,8 @@ export interface BrowserMirrorViewState {
   phase: BrowserMirrorPhase;
   tier: MobileBrowserResolvedTier | null;
   pausedReason: 'idle' | 'background' | 'relay-budget' | null;
-  frame: DisplayedBrowserFrame | null;
+  /** 是否已收到过本路流的帧（画面本体在 BrowserFrameHost，不进 App 状态）。 */
+  hasLiveFrame: boolean;
   title: string;
   loading: boolean;
   canGoBack: boolean;
@@ -48,8 +49,6 @@ export interface BrowserMirrorViewState {
   controlledByThisDevice: boolean;
   /** 桌面权威 epoch；输入与导航都要带上它。 */
   epoch: number | null;
-  /** 已 Ack 到的帧序号：同一流内每帧只确认一次。 */
-  lastAckedSeq: number;
 }
 
 export interface BrowserMirrorState {
@@ -78,8 +77,7 @@ export type BrowserMirrorAction =
       controlledByThisDevice: boolean;
     }
   | { type: 'paused'; browserCapability: string; reason: 'idle' | 'background' | 'relay-budget' }
-  | { type: 'frame'; frame: DisplayedBrowserFrame }
-  | { type: 'acknowledged'; seq: number }
+  | { type: 'frame_active'; browserCapability: string }
   | { type: 'connection_lost' }
   | { type: 'reset' };
 
@@ -96,7 +94,7 @@ function applyAction(state: BrowserMirrorState, action: BrowserMirrorAction): Br
           phase: 'starting',
           tier: null,
           pausedReason: null,
-          frame: null,
+          hasLiveFrame: false,
           title: state.panels.find((panel) => panel.browserCapability === action.browserCapability)?.title ?? '',
           loading: false,
           canGoBack: false,
@@ -104,7 +102,6 @@ function applyAction(state: BrowserMirrorState, action: BrowserMirrorAction): Br
           owner: 'desktop',
           controlledByThisDevice: false,
           epoch: null,
-          lastAckedSeq: 0,
         },
       };
     }
@@ -113,7 +110,8 @@ function applyAction(state: BrowserMirrorState, action: BrowserMirrorAction): Br
     case 'view_started': {
       const view = state.view;
       if (view === null || view.browserCapability !== action.browserCapability) return state;
-      // 新一路流的 seq 从 1 重新计数：Ack 簿记随之归零（旧流的序号不作数）。
+      // 新一路流重新开始：帧本体留在 BrowserFrameHost 里继续垫着（断线保持），
+      // 状态只标记“这一路还没收到新帧”。
       return {
         ...state,
         view: {
@@ -121,8 +119,7 @@ function applyAction(state: BrowserMirrorState, action: BrowserMirrorAction): Br
           phase: 'live',
           tier: action.tier,
           pausedReason: null,
-          frame: null,
-          lastAckedSeq: 0,
+          hasLiveFrame: false,
         },
       };
     }
@@ -155,26 +152,20 @@ function applyAction(state: BrowserMirrorState, action: BrowserMirrorAction): Br
       if (view === null || view.browserCapability !== action.browserCapability) return state;
       return { ...state, view: { ...view, phase: 'paused', pausedReason: action.reason } };
     }
-    case 'frame': {
+    case 'frame_active': {
       const view = state.view;
-      if (view === null) return state;
-      // 同一流内画面序号只前进；重放或乱序的旧帧不覆盖新画面。
-      if (view.frame !== null && action.frame.seq <= view.frame.seq) return state;
-      // 帧到达即说明推流活着：暂停遮罩（idle）随之撤下。
+      if (view === null || view.browserCapability !== action.browserCapability) return state;
+      // 帧到达即说明推流活着：暂停遮罩（idle）随之撤下。画面本体在 host，这里只翻状态位。
+      if (view.phase === 'live' && view.hasLiveFrame) return state;
       return {
         ...state,
-        view: { ...view, phase: 'live', pausedReason: null, frame: action.frame },
+        view: { ...view, phase: 'live', pausedReason: null, hasLiveFrame: true },
       };
-    }
-    case 'acknowledged': {
-      const view = state.view;
-      if (view === null) return state;
-      return { ...state, view: { ...view, lastAckedSeq: Math.max(view.lastAckedSeq, action.seq) } };
     }
     case 'connection_lost': {
       const view = state.view;
       if (view === null) return state;
-      // 断线保持（ADR-003 §11）：画面留着，标记停止等待重连恢复。
+      // 断线保持（ADR-003 §11）：画面留着（host 不清），标记停止等待重连恢复。
       return { ...state, view: { ...view, phase: 'stopped', pausedReason: null } };
     }
     case 'reset':
@@ -196,18 +187,56 @@ export function reduceBrowserMirror(
 }
 
 /**
- * Ack 节奏（设计 §5.4）：手机**显示完**一帧才确认，且每帧只确认一次；
- * 只在观看中的活动流上确认。返回 null 表示这次显示不需要再发 Ack。
+ * 显示几何（用户 2026-10-28 反馈「上下的布局有问题」后的修订）：
+ * 画面默认**撑满观看区**（cover）——比观看区更宽的帧按高度贴合、左右溢出可平移；
+ * 比观看区更高的帧按宽度贴合、上下溢出可平移。此前的「整页缩到屏宽」在宽面板下
+ * 只剩屏幕上一小条、窄竖条面板下画面比屏幕还高被硬裁，两种都不成立。
  */
-export function browserFrameAckFor(
-  state: BrowserMirrorState,
-  displayedSeq: number,
-): { browserCapability: string; seq: number } | null {
-  const view = state.view;
-  if (view === null || view.phase !== 'live') return null;
-  if (!Number.isSafeInteger(displayedSeq) || displayedSeq < 1) return null;
-  if (displayedSeq <= view.lastAckedSeq) return null;
-  return { browserCapability: view.browserCapability, seq: displayedSeq };
+export function browserDisplayGeometry(input: {
+  containerWidth: number;
+  containerHeight: number;
+  encodedWidth: number;
+  encodedHeight: number;
+}): { width: number; height: number } {
+  const cw = Math.max(1, input.containerWidth);
+  const ch = Math.max(1, input.containerHeight);
+  const ew = Math.max(1, input.encodedWidth);
+  const eh = Math.max(1, input.encodedHeight);
+  const imageAspect = ew / eh;
+  const boxAspect = cw / ch;
+  if (imageAspect > boxAspect) {
+    // 帧更宽：贴合高度，横向溢出。
+    return { width: Math.round(ch * imageAspect), height: Math.round(ch) };
+  }
+  // 帧更高（或同比例）：贴合宽度，纵向溢出。
+  return { width: Math.round(cw), height: Math.round(cw / imageAspect) };
+}
+
+/** cover 起始把溢出的那一维居中：不满的一维贴 0（画面恰好撑满）。 */
+export function browserCenteredPan(
+  geometry: { width: number; height: number },
+  container: { width: number; height: number },
+): { x: number; y: number } {
+  return {
+    x: Math.min(0, Math.round((container.width - geometry.width) / 2)),
+    y: Math.min(0, Math.round((container.height - geometry.height) / 2)),
+  };
+}
+
+/** 本地平移的边界：画面任何一维都不得拖出观看区（缩放放大后同理）。 */
+export function browserClampPan(
+  pan: { x: number; y: number },
+  zoom: number,
+  geometry: { width: number; height: number } | null,
+  container: { width: number; height: number },
+): { x: number; y: number } {
+  if (geometry === null || container.width <= 0) return { x: 0, y: 0 };
+  const maxX = Math.min(0, container.width - geometry.width * zoom);
+  const maxY = Math.min(0, container.height - geometry.height * zoom);
+  return {
+    x: Math.max(maxX, Math.min(0, pan.x)),
+    y: Math.max(maxY, Math.min(0, pan.y)),
+  };
 }
 
 /** 12 键白名单之外的任何按键都到不了发送层。 */
@@ -281,7 +310,7 @@ export function clampBrowserInsertText(text: string): string | null {
 export function browserResumeAction(
   view: BrowserMirrorViewState,
 ): { kind: 'input' } | { kind: 'view_restart' } {
-  if (view.controlledByThisDevice && view.epoch !== null && view.frame !== null) {
+  if (view.controlledByThisDevice && view.epoch !== null && view.hasLiveFrame) {
     return { kind: 'input' };
   }
   return { kind: 'view_restart' };
