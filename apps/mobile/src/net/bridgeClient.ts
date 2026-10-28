@@ -39,6 +39,12 @@ import {
   x25519PublicKeyToSpki,
 } from './protocolCrypto';
 import {
+  BROWSER_MIRROR_LIMITS,
+  decodeMobileBrowserFrame,
+  type MobileBrowserFrameHeader,
+  type MobileBrowserKeyName,
+} from '../../../../src/shared/mobileBrowserMirror';
+import {
   MobilePerformanceTrace,
   type MobilePerformanceMark,
 } from '../performance/mobilePerformanceTrace';
@@ -66,6 +72,9 @@ import {
   MOBILE_CAPABILITY_PROBE_V2_REQUEST_ID,
 } from '../../../../src/shared/types';
 import type {
+  MobileBrowserPanelSummary,
+  MobileBrowserResolvedTier,
+  MobileBrowserViewTierRequest,
   MobileFileContentKind,
   MobileFileEntry,
   MobileFileMutation,
@@ -91,13 +100,20 @@ const TERMINAL_IMAGE_CAPABILITY_RE = /^ticap_[A-Za-z0-9_-]{24,64}$/u;
 const REQUEST_ID_RE = /^req_[A-Za-z0-9_-]{8,64}$/u;
 const NOTIFICATION_ID_RE = /^ncap_[A-Za-z0-9_-]{24,64}$/u;
 const FILE_CAPABILITY_RE = /^fcap_[A-Za-z0-9_-]{24,64}$/u;
+const BROWSER_CAPABILITY_RE = /^bcap_[A-Za-z0-9_-]{24,64}$/u;
+const BROWSER_TIERS: readonly MobileBrowserResolvedTier[] = ['low', 'high', 'congested'];
+const BROWSER_TIER_REQUESTS: readonly MobileBrowserViewTierRequest[] = ['auto', 'low', 'high'];
+const BROWSER_PAUSE_REASONS: readonly ('idle' | 'background' | 'relay-budget')[] = ['idle', 'background', 'relay-budget'];
+const BROWSER_VIEW_STOP_REASONS: readonly ('requested' | 'replaced' | 'panel_closed' | 'session_end' | 'unavailable')[] = [
+  'requested', 'replaced', 'panel_closed', 'session_end', 'unavailable',
+];
 const SHA256_RE = /^[0-9a-f]{64}$/u;
 const MIME_RE = /^[a-z]+\/[a-z0-9.+-]+$/u;
 /** 未来桌面可能声明新能力：未知串只忽略，不得像 1.0.0 那样整份丢弃工作区列表。 */
 const CAPABILITY_TOKEN_RE = /^[a-z0-9-]{1,40}$/u;
 const KNOWN_SERVER_CAPABILITIES: readonly MobileServerCapability[] = [
   'terminal-grid-v1', 'workspace-files-v1', 'workspace-office-preview-v1', 'panel-states-v1',
-  'endpoint-sync-v1', 'surface-order-v1',
+  'endpoint-sync-v1', 'surface-order-v1', 'web-mirror-v1',
 ];
 const SURFACE_KINDS: readonly MobileSurfaceKind[] = ['claude', 'codex', 'shell', 'collaboration'];
 /** ADR-003 §17：两次采纳桌面新地址的最小间隔（桌面换址要连续两次 10 秒检查确认，合法变化不会更密）。 */
@@ -318,6 +334,65 @@ export type MobileCommand =
       expectedRevision: string;
       content: string;
     }
+  /** ADR-003 §19：内置网页面板镜像。只带连接级 bcap_*，无 URL、路径或 CDP 方法名。 */
+  | { kind: 'browserList'; requestId?: string }
+  | {
+      kind: 'browserView';
+      requestId?: string;
+      browserCapability: string;
+      action: 'start' | 'stop';
+      tier?: MobileBrowserViewTierRequest;
+    }
+  | { kind: 'browserFrameAck'; browserCapability: string; seq: number }
+  | {
+      kind: 'browserTakeover';
+      requestId: string;
+      browserCapability: string;
+      currentEpoch?: number;
+    }
+  | {
+      kind: 'browserInput';
+      requestId?: string;
+      browserCapability: string;
+      epoch: number;
+      baseFrameSeq: number;
+      inputType: 'pointer';
+      pointer: { action: 'tap' | 'down' | 'move' | 'up'; x: number; y: number };
+    }
+  | {
+      kind: 'browserInput';
+      requestId?: string;
+      browserCapability: string;
+      epoch: number;
+      baseFrameSeq: number;
+      inputType: 'wheel';
+      wheel: { deltaX: number; deltaY: number };
+    }
+  | {
+      kind: 'browserInput';
+      requestId?: string;
+      browserCapability: string;
+      epoch: number;
+      baseFrameSeq: number;
+      inputType: 'insertText';
+      text: string;
+    }
+  | {
+      kind: 'browserInput';
+      requestId?: string;
+      browserCapability: string;
+      epoch: number;
+      baseFrameSeq: number;
+      inputType: 'key';
+      key: MobileBrowserKeyName;
+    }
+  | {
+      kind: 'browserNav';
+      requestId: string;
+      browserCapability: string;
+      epoch: number;
+      action: 'back' | 'forward' | 'reload';
+    }
   | { kind: 'heartbeat'; requestId?: string };
 
 export const INITIAL_MOBILE_CATALOG_COMMAND_KINDS = [] as const satisfies ReadonlyArray<MobileCommand['kind']>;
@@ -446,6 +521,40 @@ export type MobileEvent =
       epoch: number;
       controlledByThisDevice?: boolean;
     }
+  /** ADR-003 §19：画面帧本体走二进制 WebSocket 帧（见 shared/mobileBrowserMirror.ts），不是 JSON 事件。 */
+  | { kind: 'browserList'; requestId?: string; panels: MobileBrowserPanelSummary[] }
+  | {
+      kind: 'browserViewStarted';
+      requestId?: string;
+      browserCapability: string;
+      tier: MobileBrowserResolvedTier;
+      width: number;
+      quality: number;
+      maxFps: number;
+      bytesPerSecond: number;
+    }
+  | {
+      kind: 'browserViewStopped';
+      browserCapability: string;
+      reason: 'requested' | 'replaced' | 'panel_closed' | 'session_end' | 'unavailable';
+    }
+  | {
+      kind: 'browserState';
+      requestId?: string;
+      browserCapability: string;
+      title: string;
+      loading: boolean;
+      canGoBack: boolean;
+      canGoForward: boolean;
+      owner: 'desktop' | 'mobile';
+      epoch: number;
+      controlledByThisDevice?: boolean;
+    }
+  | {
+      kind: 'browserPaused';
+      browserCapability: string;
+      reason: 'idle' | 'background' | 'relay-budget';
+    }
   | {
       kind: 'error';
       code: string;
@@ -570,6 +679,16 @@ export interface FrameCipher {
     ciphertext: string,
     tag: string,
   ): Promise<string>;
+  /**
+   * 二进制画面帧（ADR-003 §19）的字节版 open：明文是 JPEG 字节，不做 base64。
+   * counter 与 JSON 帧共用同一会话计数器空间，由 EncryptedChannel 统一管理。
+   */
+  openBytes?(
+    key: Uint8Array,
+    counter: number,
+    ciphertext: Uint8Array,
+    tag: Uint8Array,
+  ): Promise<Uint8Array>;
 }
 
 export class ExpoFrameCipher implements FrameCipher {
@@ -616,6 +735,18 @@ export class ExpoFrameCipher implements FrameCipher {
     );
     const plaintext = await aesDecryptAsync(sealed, key, { output: 'bytes' });
     return bytesToText(plaintext);
+  }
+
+  /** ADR-003 §19：画面帧明文就是 JPEG 字节，进出都不经 base64。 */
+  async openBytes(
+    keyBytes: Uint8Array,
+    counter: number,
+    ciphertext: Uint8Array,
+    tag: Uint8Array,
+  ): Promise<Uint8Array> {
+    const key = await this.key(keyBytes);
+    const sealed = AESSealedData.fromParts(counterIv(counter), ciphertext, tag);
+    return aesDecryptAsync(sealed, key, { output: 'bytes' });
   }
 }
 
@@ -898,6 +1029,26 @@ export class EncryptedChannel {
     } catch {
       throw new Error('invalid encrypted payload');
     }
+  }
+
+  /**
+   * 二进制画面帧（ADR-003 §19）：解头部 → 共享的入站计数器窗口（与 JSON 帧同一个
+   * `inboundCounter`，严格单调）→ AES-GCM 解密。任何一步失败都抛错，由调用方
+   * 统一 fail closed；counter 校验放在解密之前，损坏帧不消耗解密开销。
+   */
+  async openBrowserFrame(bytes: Uint8Array): Promise<{
+    header: MobileBrowserFrameHeader;
+    jpeg: Uint8Array;
+  }> {
+    const decoded = decodeMobileBrowserFrame(bytes);
+    if (!decoded.ok) throw new Error('invalid browser frame');
+    const { header, cipher } = decoded.frame;
+    if (header.counter <= this.inboundCounter) throw new Error('frame counter replay');
+    const openBytes = this.cipher.openBytes;
+    if (openBytes === undefined) throw new Error('browser frame cipher unavailable');
+    const jpeg = await openBytes.call(this.cipher, this.receiveKey, header.counter, cipher, header.tag);
+    this.inboundCounter = header.counter;
+    return { header, jpeg };
   }
 }
 
@@ -1846,6 +1997,86 @@ export function parseMobileEvent(value: unknown): MobileEvent {
         && (value.byteLength as number) <= MOBILE_FILE_TEXT_MAX_BYTES
       ) return value as unknown as MobileEvent;
       break;
+    case 'browserList':
+      if (
+        exactKeys(value, ['kind', 'requestId', 'panels'])
+        && (value.requestId === undefined
+          || (typeof value.requestId === 'string' && REQUEST_ID_RE.test(value.requestId)))
+        && Array.isArray(value.panels)
+        && value.panels.length <= 100
+        && value.panels.every((panel) => (
+          isObject(panel)
+          && exactKeys(panel, ['browserCapability', 'title', 'source', 'workspaceCapability', 'workspaceLabel'])
+          && typeof panel.browserCapability === 'string'
+          && BROWSER_CAPABILITY_RE.test(panel.browserCapability)
+          && typeof panel.title === 'string'
+          && panel.title.length >= 1
+          && panel.title.length <= 120
+          && panel.source === 'connect-panel'
+          && typeof panel.workspaceCapability === 'string'
+          && WORKSPACE_CAPABILITY_RE.test(panel.workspaceCapability)
+          && typeof panel.workspaceLabel === 'string'
+          && panel.workspaceLabel.length >= 1
+          && panel.workspaceLabel.length <= 160
+        ))
+      ) return value as unknown as MobileEvent;
+      break;
+    case 'browserViewStarted':
+      if (
+        exactKeys(value, [
+          'kind', 'requestId', 'browserCapability', 'tier', 'width', 'quality', 'maxFps', 'bytesPerSecond',
+        ])
+        && (value.requestId === undefined
+          || (typeof value.requestId === 'string' && REQUEST_ID_RE.test(value.requestId)))
+        && typeof value.browserCapability === 'string'
+        && BROWSER_CAPABILITY_RE.test(value.browserCapability)
+        && (BROWSER_TIERS as readonly unknown[]).includes(value.tier)
+        && Number.isInteger(value.width) && (value.width as number) >= 1 && (value.width as number) <= 4096
+        && Number.isInteger(value.quality) && (value.quality as number) >= 1 && (value.quality as number) <= 100
+        && Number.isInteger(value.maxFps) && (value.maxFps as number) >= 1 && (value.maxFps as number) <= 60
+        && Number.isInteger(value.bytesPerSecond)
+        && (value.bytesPerSecond as number) >= 1
+        && (value.bytesPerSecond as number) <= 10_000_000
+      ) return value as unknown as MobileEvent;
+      break;
+    case 'browserViewStopped':
+      if (
+        exactKeys(value, ['kind', 'browserCapability', 'reason'])
+        && typeof value.browserCapability === 'string'
+        && BROWSER_CAPABILITY_RE.test(value.browserCapability)
+        && (BROWSER_VIEW_STOP_REASONS as readonly unknown[]).includes(value.reason)
+      ) return value as unknown as MobileEvent;
+      break;
+    case 'browserState':
+      if (
+        exactKeys(value, [
+          'kind', 'requestId', 'browserCapability', 'title', 'loading', 'canGoBack', 'canGoForward',
+          'owner', 'epoch', 'controlledByThisDevice',
+        ])
+        && (value.requestId === undefined
+          || (typeof value.requestId === 'string' && REQUEST_ID_RE.test(value.requestId)))
+        && typeof value.browserCapability === 'string'
+        && BROWSER_CAPABILITY_RE.test(value.browserCapability)
+        && typeof value.title === 'string'
+        && value.title.length >= 1
+        && value.title.length <= 120
+        && typeof value.loading === 'boolean'
+        && typeof value.canGoBack === 'boolean'
+        && typeof value.canGoForward === 'boolean'
+        && (value.owner === 'desktop' || value.owner === 'mobile')
+        && Number.isSafeInteger(value.epoch)
+        && (value.epoch as number) >= 1
+        && (value.controlledByThisDevice === undefined || typeof value.controlledByThisDevice === 'boolean')
+      ) return value as unknown as MobileEvent;
+      break;
+    case 'browserPaused':
+      if (
+        exactKeys(value, ['kind', 'browserCapability', 'reason'])
+        && typeof value.browserCapability === 'string'
+        && BROWSER_CAPABILITY_RE.test(value.browserCapability)
+        && (BROWSER_PAUSE_REASONS as readonly unknown[]).includes(value.reason)
+      ) return value as unknown as MobileEvent;
+      break;
     case 'error': {
       const allowed = ['retryable', 'action_required', 'permanent', 'ambiguous'];
       if (
@@ -1915,6 +2146,30 @@ export interface SocketLike {
   onerror: ((event?: { message?: unknown }) => void) | null;
   send(data: string): void;
   close(code?: number, reason?: string): void;
+  /** 二进制画面帧（ADR-003 §19）要求 RN WebSocket 显式声明才按 ArrayBuffer 投递。 */
+  binaryType?: 'arraybuffer' | 'blob';
+}
+
+/** RN 的二进制投递形态（ArrayBuffer / TypedArray）→ 字节视图；文本帧返回 null。 */
+function socketDataToBytes(data: unknown): Uint8Array | null {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) return new Uint8Array((data as ArrayBufferView).buffer, (data as ArrayBufferView).byteOffset, (data as ArrayBufferView).byteLength);
+  return null;
+}
+
+/**
+ * 画面二进制帧识别：只有 'CBF1' 魔数开头的二进制数据走 browserFrame 通道。
+ * Relay 把文本帧重发成二进制帧的历史坑（见 socketDataToText）不受影响——
+ * 那些 UTF-8 解得回 JSON 文本，永远不会撞上魔数。
+ */
+function browserFrameBytes(data: unknown): Uint8Array | null {
+  const bytes = socketDataToBytes(data);
+  if (
+    bytes === null
+    || bytes.byteLength <= 4
+    || bytes[0] !== 0x43 || bytes[1] !== 0x42 || bytes[2] !== 0x46 || bytes[3] !== 0x31
+  ) return null;
+  return bytes;
 }
 
 export interface BridgeClientCallbacks {
@@ -1931,6 +2186,11 @@ export interface BridgeClientCallbacks {
     reason: string;
   }): void;
   onEvent?(event: MobileEvent): void;
+  /**
+   * ADR-003 §19：解密后的画面帧（JPEG 字节 + 帧头）。属于当前连接唯一的一路
+   * browserView；调用方从自己的观看状态取 bcap。帧本体不是 MobileEvent。
+   */
+  onBrowserFrame?(frame: { header: MobileBrowserFrameHeader; jpeg: Uint8Array }): void;
   onPtyData?(event: PtyDataEvent, timing: PtyIngressTiming): void;
   onPtyHistory?(history: AssembledPtyHistory): void;
   onGap?(panelId: string, expected: number, received: number): void;
@@ -2044,6 +2304,8 @@ export class BridgeClient {
   private panelStatesCapability = false;
   private endpointSyncCapability = false;
   private surfaceOrderCapability = false;
+  /** ADR-003 §19：本连接的桌面声明了 web-mirror-v1 才能发任何 browser 命令。 */
+  private webMirrorCapability = false;
   private lastEndpointUpdateAtMs = 0;
   /** ADR-003 §17 回退候选：桌面换址前的那组地址。新地址认证成功一次即丢弃。 */
   private fallbackEndpoint: { host: string; port: number } | null = null;
@@ -2483,6 +2745,99 @@ export class BridgeClient {
     return requestId;
   }
 
+  // ── ADR-003 §19：内置网页面板镜像 ───────────────────────────────────────────
+  // 全部命令只在桌面声明 web-mirror-v1 后才可发；旧桌面收到未知命令会以 1008 断开，
+  // 所以这里在客户端就拒绝，而不是把连接送上去。
+
+  private assertWebMirrorSupport(): void {
+    if (!this.webMirrorCapability) {
+      throw new Error('web mirror is not supported by the desktop');
+    }
+  }
+
+  async listBrowserPanels(requestId = createMobileRequestId()): Promise<void> {
+    this.assertWebMirrorSupport();
+    await this.send({ kind: 'browserList', requestId });
+  }
+
+  async startBrowserView(
+    browserCapability: string,
+    tier: MobileBrowserViewTierRequest = 'auto',
+    requestId = createMobileRequestId(),
+  ): Promise<void> {
+    this.assertWebMirrorSupport();
+    await this.send({ kind: 'browserView', requestId, browserCapability, action: 'start', tier });
+  }
+
+  async stopBrowserView(browserCapability: string): Promise<void> {
+    this.assertWebMirrorSupport();
+    await this.send({ kind: 'browserView', browserCapability, action: 'stop' });
+  }
+
+  /** 手机显示完一帧才确认（协议保证最多 1 张在途；见设计 §5.4）。 */
+  async ackBrowserFrame(browserCapability: string, seq: number): Promise<void> {
+    this.assertWebMirrorSupport();
+    await this.send({ kind: 'browserFrameAck', browserCapability, seq });
+  }
+
+  async takeoverBrowser(
+    browserCapability: string,
+    requestId = createMobileRequestId(),
+    currentEpoch?: number,
+  ): Promise<void> {
+    this.assertWebMirrorSupport();
+    await this.send({
+      kind: 'browserTakeover',
+      requestId,
+      browserCapability,
+      ...(currentEpoch === undefined ? {} : { currentEpoch }),
+    });
+  }
+
+  async sendBrowserInput(input: {
+    browserCapability: string;
+    epoch: number;
+    baseFrameSeq: number;
+    inputType: 'pointer';
+    pointer: { action: 'tap' | 'down' | 'move' | 'up'; x: number; y: number };
+  } | {
+    browserCapability: string;
+    epoch: number;
+    baseFrameSeq: number;
+    inputType: 'wheel';
+    wheel: { deltaX: number; deltaY: number };
+  } | {
+    browserCapability: string;
+    epoch: number;
+    baseFrameSeq: number;
+    inputType: 'insertText';
+    text: string;
+  } | {
+    browserCapability: string;
+    epoch: number;
+    baseFrameSeq: number;
+    inputType: 'key';
+    key: MobileBrowserKeyName;
+  }): Promise<void> {
+    this.assertWebMirrorSupport();
+    if (input.inputType === 'insertText') {
+      const bounded = input.text.slice(0, BROWSER_MIRROR_LIMITS.insertTextMaxLength);
+      await this.send({ kind: 'browserInput', ...input, text: bounded });
+      return;
+    }
+    await this.send({ kind: 'browserInput', ...input });
+  }
+
+  async sendBrowserNav(
+    browserCapability: string,
+    epoch: number,
+    action: 'back' | 'forward' | 'reload',
+    requestId = createMobileRequestId(),
+  ): Promise<void> {
+    this.assertWebMirrorSupport();
+    await this.send({ kind: 'browserNav', requestId, browserCapability, epoch, action });
+  }
+
   private setState(state: BridgeConnectionState): void {
     if (this.state === state) return;
     this.state = state;
@@ -2607,6 +2962,8 @@ export class BridgeClient {
       ? this.fallbackEndpoint
       : profile;
     const socket = this.socketFactory(relayEndpoint?.url ?? `ws://${directTarget.host}:${directTarget.port}`);
+    // ADR-003 §19：显式要 ArrayBuffer 形态的二进制投递（RN 各版本默认不一）。
+    try { socket.binaryType = 'arraybuffer'; } catch { /* 结构化替身 socket 无此属性 */ }
     if (recoveryGeneration !== undefined) {
       this.socketRecoveryGenerations.set(socket, recoveryGeneration);
     }
@@ -2656,6 +3013,8 @@ export class BridgeClient {
     // 同时拨直连；谁先送来协议握手帧（serverHello）用谁。Relay-only 档案的哑地址不参与。
     if (relayEndpoint !== null && isRaceableDirectHost(profile.host)) {
       const sibling = this.socketFactory(`ws://${profile.host}:${profile.port}`);
+      // 竞速线同样按 ArrayBuffer 收二进制画面帧。
+      try { sibling.binaryType = 'arraybuffer'; } catch { /* 同上 */ }
       if (recoveryGeneration !== undefined) this.socketRecoveryGenerations.set(sibling, recoveryGeneration);
       this.raceLosers.add(sibling);
       // 直连无 Relay 控制面：打开后等桌面主动发 serverHello。主线（Relay）已先断、由它顶上时，
@@ -2684,6 +3043,16 @@ export class BridgeClient {
     socket.onmessage = (event) => {
       const socketReceivedAtMs = this.now();
       this.lastInboundAtMs = socketReceivedAtMs;
+      // ADR-003 §19：'CBF1' 二进制画面帧走独立解密路径，与 JSON 帧共用同一条
+      // 串行队列（保序）与同一个入站计数器窗口（防重放）。
+      const binaryFrame = browserFrameBytes(event.data);
+      if (binaryFrame !== null) {
+        if (!this.settleRace(socket, operationId)) return;
+        this.incoming = this.incoming
+          .then(() => this.handleBrowserFrameMessage(socket, binaryFrame))
+          .catch((error: unknown) => this.failClosed(socket, error));
+        return;
+      }
       // 中转可能把桌面发来的文本帧重发成二进制帧(RN 投递 ArrayBuffer),先还原再走协议。
       const text = socketDataToText(event.data);
       if (text === null) {
@@ -2779,6 +3148,15 @@ export class BridgeClient {
       try { loser.close(1012, 'raced out'); } catch { /* 已关闭 */ }
     }
   }
+  /** 二进制画面帧（ADR-003 §19）：解头部 → 共享计数器窗口 → AES-GCM 解密 → 回调。 */
+  private async handleBrowserFrameMessage(socket: SocketLike, bytes: Uint8Array): Promise<void> {
+    if (socket !== this.socket) throw new Error('invalid socket message');
+    const channel = this.channel;
+    if (channel === null) throw new Error('encrypted channel unavailable');
+    const opened = await channel.openBrowserFrame(bytes);
+    this.callbacks.onBrowserFrame?.(opened);
+  }
+
   private async handleMessage(
     socket: SocketLike,
     data: unknown,
@@ -3249,11 +3627,18 @@ export class BridgeClient {
       if (this.surfaceOrderCapability) {
         void this.send({ kind: 'watchSurfaceOrder', requestId: createMobileRequestId() }).catch(() => undefined);
       }
+      // ADR-003 §19：网页镜像只在桌面声明 web-mirror-v1 时启用；旧桌面完全不受影响。
+      this.webMirrorCapability = event.capabilities.includes('web-mirror-v1');
       return;
     }
     if (event.requestId === MOBILE_CAPABILITY_PROBE_REQUEST_ID) {
       this.finishCapabilityProbe(event.capabilities?.includes('terminal-grid-v1') === true, false, true);
     }
+  }
+
+  /** 桌面声明了 web-mirror-v1：才可以发 browser 命令；旧桌面会以 1008 断开未知命令。 */
+  get supportsWebMirror(): boolean {
+    return this.webMirrorCapability;
   }
 
   get supportsWorkspaceFiles(): boolean {
@@ -3307,6 +3692,7 @@ export class BridgeClient {
     this.panelStatesCapability = false;
     this.endpointSyncCapability = false;
     this.surfaceOrderCapability = false;
+    this.webMirrorCapability = false;
     if (probe === null) return;
     this.cancelSchedule(probe.timer);
     probe.resolve(false);

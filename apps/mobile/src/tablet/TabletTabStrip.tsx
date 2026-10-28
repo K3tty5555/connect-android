@@ -5,6 +5,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { PanelLeft, Plus, X } from 'lucide-react-native';
 import type { SessionPanelSummary } from '../domain/session';
 import { panelDisplayLabel } from '../domain/panelLabel';
+import type { TabletBrowserTab } from './tabletLayout';
 import { FileIcon } from '../files/fileIcon';
 import { KindIcon } from '../components/KindIcon';
 import { MotionPressable } from '../components/MotionPressable';
@@ -44,6 +45,10 @@ export function TabletTabStrip({
   onCreateSession,
   online = false,
   panelStatuses = NO_PANEL_STATUSES,
+  browserTab = null,
+  browserActive = false,
+  onSelectBrowser,
+  onCloseBrowser,
 }: {
   /** Lamps show only while connected: an old colour must not pass for the current one. */
   online?: boolean;
@@ -61,11 +66,20 @@ export function TabletTabStrip({
   onSelectFile(tab: TabletFileTab): void;
   onCloseFile(tab: TabletFileTab): void;
   onCreateSession(): void;
+  /** ADR-003 §19：已打开的网页镜像占一个标签；没有就是 null（旧桌面永远是 null）。 */
+  browserTab?: TabletBrowserTab | null;
+  browserActive?: boolean;
+  onSelectBrowser?(tab: TabletBrowserTab): void;
+  onCloseBrowser?(tab: TabletBrowserTab): void;
 }): React.ReactElement {
   const styles = createStyles(theme);
   const scrollRef = useRef<ScrollView>(null);
   const tabX = useRef(new Map<string, number>());
-  const activeKey = activeFileKey ?? (activePanelId === null ? null : `panel:${activePanelId}`);
+  const browserKey = browserTab === null ? null : `web:${browserTab.browserCapability}`;
+  const browserSelected = browserActive && browserTab !== null;
+  const activeKey = browserSelected
+    ? browserKey
+    : activeFileKey ?? (activePanelId === null ? null : `panel:${activePanelId}`);
   // 新打开的文件排在会话之后，常落在可视区外：激活的标签总要滚进视野。
   useEffect(() => {
     if (activeKey === null) return;
@@ -94,7 +108,7 @@ export function TabletTabStrip({
         style={styles.scroller}
       >
         {sessions.map((panel) => {
-          const selected = activeFileKey === null && panel.panelId === activePanelId;
+          const selected = !browserSelected && activeFileKey === null && panel.panelId === activePanelId;
           return (
             <MotionPressable
               accessibilityLabel={panelDisplayLabel(panel)}
@@ -123,14 +137,18 @@ export function TabletTabStrip({
         })}
         {files.map((tab) => {
           const key = tabletFileTabKey(tab);
-          const selected = key === activeFileKey;
+          const selected = !browserSelected && key === activeFileKey;
           const name = tab.subPath.slice(tab.subPath.lastIndexOf('/') + 1);
           return (
             <MotionPressable
+              accessibilityActions={[{ name: 'close', label: t('关闭 {name}', { name }) }]}
               accessibilityLabel={name}
               accessibilityRole="tab"
               accessibilityState={{ selected }}
               key={key}
+              onAccessibilityAction={(event) => {
+                if (event.nativeEvent.actionName === 'close') onCloseFile(tab);
+              }}
               onLayout={remember(key)}
               onPress={() => onSelectFile(tab)}
               style={[styles.tab, selected ? styles.tabSelected : null]}
@@ -151,6 +169,40 @@ export function TabletTabStrip({
             </MotionPressable>
           );
         })}
+        {browserTab !== null && browserKey !== null ? (
+          <MotionPressable
+            accessibilityActions={onCloseBrowser !== undefined
+              ? [{ name: 'close', label: t('关闭 {name}', { name: browserTab.title }) }]
+              : undefined}
+            accessibilityLabel={browserTab.title}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: browserSelected }}
+            key={browserKey}
+            onAccessibilityAction={onCloseBrowser !== undefined
+              ? (event) => {
+                if (event.nativeEvent.actionName === 'close') onCloseBrowser(browserTab);
+              }
+              : undefined}
+            onLayout={remember(browserKey)}
+            onPress={() => onSelectBrowser?.(browserTab)}
+            style={[styles.tab, browserSelected ? styles.tabSelected : null]}
+            testID="tablet-web-tab"
+          >
+            <KindIcon kind="web" size={15} theme={theme} />
+            <Text maxFontSizeMultiplier={MAX_COMPACT_FONT_SCALE} numberOfLines={1} style={[styles.label, browserSelected ? styles.labelSelected : null]}>
+              {browserTab.title}
+            </Text>
+            <MotionPressable
+              accessibilityLabel={t('关闭 {name}', { name: browserTab.title })}
+              accessibilityRole="button"
+              hitSlop={6}
+              onPress={() => onCloseBrowser?.(browserTab)}
+              style={styles.close}
+            >
+              <X color={theme.colors.text3} size={13} />
+            </MotionPressable>
+          </MotionPressable>
+        ) : null}
       </ScrollView>
       <MotionPressable
         accessibilityLabel={t('新建项目会话')}

@@ -158,10 +158,17 @@ export function planGridVt(
     for (const row of frame.historyRows) text += `${rowToVt(row, agent)}\r\n`;
     text += frame.viewportRows.map((row) => rowToVt(row, agent)).join('\r\n');
     text += cursorVt(frame);
+    // Rebuilding the panel on screen at the same shape keeps the reader's place
+    // in history. A new shape is a new layout: the rows re-wrap, the place no
+    // longer exists, and anchoring to it landed on the top row
+    // (IPAD-SIDEBAR-SCROLL-TOP-1025, user decision 2026-10-26: open on the newest row).
+    const keepScroll = previous !== null
+      && previous.panelId === frame.panelId
+      && previous.cols === frame.cols
+      && previous.rows === frame.rows;
     return {
       commands: [
-        // Rebuilding the panel on screen keeps the reader's place in history.
-        { kind: 'reset', keepScroll: previous !== null && previous.panelId === frame.panelId },
+        { kind: 'reset', keepScroll },
         { kind: 'geometry', cols: frame.cols, rows: frame.rows },
         { kind: 'text', data: text },
       ],

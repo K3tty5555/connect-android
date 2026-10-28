@@ -1,6 +1,6 @@
 # Connect for Android — source
 
-This repository is the complete corresponding source of **Connect for Android 1.0.14**, published under the
+This repository is the complete corresponding source of **Connect for Android 1.0.15**, published under the
 GNU General Public License v3 (see `LICENSE`). Each Android release is a snapshot tagged `v<version>`.
 
 Connect is the phone companion of the Connect desktop app: it pairs with your own computer over Tailscale or a
@@ -35,7 +35,7 @@ so a self-built APK cannot update an installed official one (uninstall it first)
 
 # Connect Android 版源码
 
-本仓库是 **Connect Android 1.0.14** 的完整对应源码，按 GNU GPL 第 3 版发布（见 `LICENSE`），不提供任何担保。
+本仓库是 **Connect Android 1.0.15** 的完整对应源码，按 GNU GPL 第 3 版发布（见 `LICENSE`），不提供任何担保。
 每个 Android 版本一个快照，标签 `v<版本号>`。Android 版内嵌 Termux 终端组件（GPLv3），因此整个 Android 版以 GPLv3 开源；
 电脑端不在本仓库内。构建方法见上文 Build 一节。
 

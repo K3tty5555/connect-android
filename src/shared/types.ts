@@ -6,6 +6,18 @@ import type {
   TerminalMouseAction,
   TerminalMouseButton,
 } from './terminalInput';
+import type {
+  MobileBrowserKeyName,
+  MobileBrowserResolvedTier,
+  MobileBrowserViewTierRequest,
+} from './mobileBrowserMirror.js';
+
+export type {
+  MobileBrowserKeyName,
+  MobileBrowserResolvedTier,
+  MobileBrowserTierParams,
+  MobileBrowserViewTierRequest,
+} from './mobileBrowserMirror.js';
 
 export type Provider = 'claude' | 'codex' | 'fake';
 export type GatePolicy = 'every_round' | 'on_approve' | 'full_auto';
@@ -543,6 +555,43 @@ export interface WorkspaceInvalidated {
   workspacePath: string;
 }
 
+/**
+ * 内置网页面板（MOBILE-BROWSER-PREVIEW-1023 第 1a 步，用户 2026-10-26 拍板）：
+ * 只打开本机回环地址或已信任工作区内的 HTML 文件。契约见 `contracts/web-panel-*.schema.json`。
+ */
+export type WebPanelTarget =
+  | { kind: 'url'; url: string }
+  | { kind: 'file'; subPath: string };
+
+export interface WebPanelBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type WebPanelCommandAction = 'back' | 'forward' | 'reload' | 'stop';
+
+export type WebPanelRequest =
+  | { schemaVersion: 1; op: 'open'; workspacePath: string; target: WebPanelTarget }
+  | { schemaVersion: 1; op: 'navigate'; viewId: string; target: WebPanelTarget }
+  | { schemaVersion: 1; op: 'command'; viewId: string; action: WebPanelCommandAction }
+  | { schemaVersion: 1; op: 'bounds'; viewId: string; bounds: WebPanelBounds; visible: boolean }
+  | { schemaVersion: 1; op: 'freeze' | 'close'; viewId: string };
+
+export type WebPanelNotice = 'blocked' | 'file_denied' | 'load_failed' | 'crashed';
+
+export interface WebPanelState {
+  schemaVersion: 1;
+  viewId: string;
+  target: WebPanelTarget | null;
+  title: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  notice: WebPanelNotice | null;
+}
+
 /** 侧栏单灯：attention（红）> running（黄）> idle（绿）。 */
 export type WorkspaceAggregateStatus =
   | 'idle'
@@ -845,7 +894,8 @@ export type MobileServerCapability =
   | 'workspace-office-preview-v1'
   | 'panel-states-v1'
   | 'endpoint-sync-v1'
-  | 'surface-order-v1';
+  | 'surface-order-v1'
+  | 'web-mirror-v1';
 /** ADR-003 §17：桌面已绑定成功的直连监听；未监听（含 Relay-only）为 null。 */
 export interface MobileBridgeEndpoint {
   host: string;
@@ -1051,6 +1101,65 @@ export type MobileCommand =
       expectedRevision: string;
       content: string;
     }
+  /** ADR-003 §19：内置网页面板手机镜像。命令只带连接级 bcap_*，无任何 URL / CDP 方法名。 */
+  | { kind: 'browserList'; requestId?: string }
+  | {
+      kind: 'browserView';
+      requestId?: string;
+      browserCapability: string;
+      action: 'start' | 'stop';
+      tier?: MobileBrowserViewTierRequest;
+    }
+  | { kind: 'browserFrameAck'; browserCapability: string; seq: number }
+  | {
+      kind: 'browserTakeover';
+      requestId: string;
+      browserCapability: string;
+      currentEpoch?: number;
+    }
+  | {
+      kind: 'browserInput';
+      requestId?: string;
+      browserCapability: string;
+      epoch: number;
+      baseFrameSeq: number;
+      inputType: 'pointer';
+      pointer: { action: 'tap' | 'down' | 'move' | 'up'; x: number; y: number };
+    }
+  | {
+      kind: 'browserInput';
+      requestId?: string;
+      browserCapability: string;
+      epoch: number;
+      baseFrameSeq: number;
+      inputType: 'wheel';
+      wheel: { deltaX: number; deltaY: number };
+    }
+  | {
+      kind: 'browserInput';
+      requestId?: string;
+      browserCapability: string;
+      epoch: number;
+      baseFrameSeq: number;
+      inputType: 'insertText';
+      text: string;
+    }
+  | {
+      kind: 'browserInput';
+      requestId?: string;
+      browserCapability: string;
+      epoch: number;
+      baseFrameSeq: number;
+      inputType: 'key';
+      key: MobileBrowserKeyName;
+    }
+  | {
+      kind: 'browserNav';
+      requestId: string;
+      browserCapability: string;
+      epoch: number;
+      action: 'back' | 'forward' | 'reload';
+    }
   | { kind: 'heartbeat'; requestId?: string };
 
 export type MobileEvent =
@@ -1140,6 +1249,40 @@ export type MobileEvent =
       surfaceKind: MobileSurfaceKind;
     }
   | { kind: 'surfaceCloseAccepted'; requestId: string; panelId: string }
+  /** ADR-003 §19：画面帧本体走二进制 WebSocket 帧（见 shared/mobileBrowserMirror.ts），不是 JSON 事件。 */
+  | { kind: 'browserList'; requestId?: string; panels: MobileBrowserPanelSummary[] }
+  | {
+      kind: 'browserViewStarted';
+      requestId?: string;
+      browserCapability: string;
+      tier: MobileBrowserResolvedTier;
+      width: number;
+      quality: number;
+      maxFps: number;
+      bytesPerSecond: number;
+    }
+  | {
+      kind: 'browserViewStopped';
+      browserCapability: string;
+      reason: 'requested' | 'replaced' | 'panel_closed' | 'session_end' | 'unavailable';
+    }
+  | {
+      kind: 'browserState';
+      requestId?: string;
+      browserCapability: string;
+      title: string;
+      loading: boolean;
+      canGoBack: boolean;
+      canGoForward: boolean;
+      owner: 'desktop' | 'mobile';
+      epoch: number;
+      controlledByThisDevice?: boolean;
+    }
+  | {
+      kind: 'browserPaused';
+      browserCapability: string;
+      reason: 'idle' | 'background' | 'relay-budget';
+    }
   | TerminalGridFrame
   | {
       kind: 'ptyReplay';
@@ -1299,6 +1442,15 @@ export interface MobilePanelSummary {
 export interface MobileRoomSummary {
   roomCapability: string;
   label: string;
+  workspaceCapability: string;
+  workspaceLabel: string;
+}
+
+/** ADR-003 §19：手机看到的网页面板条目——只有不透明 bcap、有界标题、来源类型与所属工作区。 */
+export interface MobileBrowserPanelSummary {
+  browserCapability: string;
+  title: string;
+  source: 'connect-panel';
   workspaceCapability: string;
   workspaceLabel: string;
 }
@@ -1564,8 +1716,8 @@ export interface DesktopUpdatePreferences {
 }
 
 /** 工作区顶部新建按钮配置（contracts/toolbar-buttons.schema.json，DESKTOP-TOOLBAR-BUTTONS-1025）。 */
-/** kimi：预置的 Kimi Code，默认隐藏（用户 2026-10-25 拍板）。 */
-export const TOOLBAR_BUILTIN_IDS = ['claude', 'codex', 'shell', 'collab', 'kimi'] as const;
+/** kimi：预置的 Kimi Code，默认隐藏（用户 2026-10-25 拍板）。web：内置网页面板按钮，默认显示（用户 2026-10-26 拍板）。 */
+export const TOOLBAR_BUILTIN_IDS = ['claude', 'codex', 'shell', 'collab', 'kimi', 'web'] as const;
 export type ToolbarBuiltinId = typeof TOOLBAR_BUILTIN_IDS[number];
 export const TOOLBAR_ICONS = [
   'terminal', 'kimi', 'deepseek', 'qwen', 'zhipu', 'doubao', 'minimax', 'hunyuan',

@@ -9,7 +9,8 @@ import { Settings as NativeSettings } from 'react-native';
  * serves every screenshot. The app never pairs or connects in this mode: every
  * screen is fed from `storeShotFixtures`, and nothing reaches a Mac.
  */
-export type StoreShotScene = 'terminal' | 'sessions' | 'create' | 'room' | 'pair' | 'files';
+/** `web` 只服务 iPad 的网页镜像 UI 测试（ADR-003 §19），不在商店截图清单里。 */
+export type StoreShotScene = 'terminal' | 'sessions' | 'create' | 'room' | 'pair' | 'files' | 'web';
 export type StoreShotLocale = 'zh-Hans' | 'zh-Hant' | 'en';
 
 export interface StoreShot {
@@ -17,7 +18,7 @@ export interface StoreShot {
   locale: StoreShotLocale;
 }
 
-const SCENES: readonly StoreShotScene[] = ['terminal', 'sessions', 'create', 'room', 'pair', 'files'];
+const SCENES: readonly StoreShotScene[] = ['terminal', 'sessions', 'create', 'room', 'pair', 'files', 'web'];
 const LOCALES: readonly StoreShotLocale[] = ['zh-Hans', 'zh-Hant', 'en'];
 
 function readStoreShot(): StoreShot {

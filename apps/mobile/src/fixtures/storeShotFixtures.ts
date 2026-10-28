@@ -64,6 +64,25 @@ export function storeShotSession(shot: Pick<StoreShot, 'scene' | 'locale'>): Ses
 
 export const STORE_SHOT_WORKSPACE = PROJECT_CAPABILITY;
 
+/**
+ * `web` 场景（iPad 网页镜像 UI 测试，ADR-003 §19）里桌面「正在打开的网页面板」目录。
+ * 与真实协议一样只有不透明 capability 与标题，**没有 URL 或路径**。
+ */
+export function storeShotBrowserPanels(locale: StoreShotLocale): Array<{
+  browserCapability: string;
+  title: string;
+  workspaceCapability: string;
+  workspaceLabel: string;
+}> {
+  const title = locale === 'en' ? 'Local preview' : locale === 'zh-Hant' ? '本地預覽' : '本地预览';
+  return [{
+    browserCapability: 'bcap_storeshot_local_preview00',
+    title,
+    workspaceCapability: PROJECT_CAPABILITY,
+    workspaceLabel: PROJECT,
+  }];
+}
+
 /** Six digits, the same length the pairing handshake shows. */
 export const STORE_SHOT_SAS = '482915';
 
@@ -270,7 +289,17 @@ const TERMINAL: Record<StoreShotLocale, { history: Line[]; working: string; prom
   },
 };
 
-export function storeShotTerminalFrame(locale: StoreShotLocale): NativeTerminalGridState {
+/**
+ * The scene shows the phone holding input, and a PTY the phone holds follows
+ * the shape its terminal view reports (ADR-003 §11). Pass that shape as `fit`
+ * and the frame takes it: the transcript fills the screen from the bottom up,
+ * as on a real followed PTY, instead of a 6-row canvas at the top of an iPad
+ * with the rest of the conversation out of sight (STORE-SHOTS-SCREENSHOT-MODE-1020).
+ */
+export function storeShotTerminalFrame(
+  locale: StoreShotLocale,
+  fit?: { cols: number; rows: number },
+): NativeTerminalGridState {
   const copy = TERMINAL[locale];
   const viewport: Line[] = [
     [['✻ ', 'o'], [copy.working, 'o'], [' (esc to interrupt)', 'd']],
@@ -280,16 +309,20 @@ export function storeShotTerminalFrame(locale: StoreShotLocale): NativeTerminalG
     [[RULE, 'd']],
     [['  ⏵⏵ accept edits on', 'm'], [' (shift+tab to cycle)', 'd']],
   ];
+  const rows = Math.max(viewport.length, Math.min(200, Math.floor(fit?.rows ?? 0)));
+  const transcript = [...copy.history, ...viewport].map(toRow);
+  const blank = (): TerminalGridRow => ({ wrapped: false, spans: [] });
+  const padded = [...Array.from({ length: Math.max(0, rows - transcript.length) }, blank), ...transcript];
   return {
     panelId: CLAUDE_PANEL,
     revision: 1,
     upperSeq: 1,
-    cols: COLS,
-    rows: viewport.length,
+    cols: Math.max(COLS, Math.min(500, Math.floor(fit?.cols ?? 0))),
+    rows,
     screen: 'normal',
     omittedLines: 0,
-    historyRows: copy.history.map(toRow),
-    viewportRows: viewport.map(toRow),
-    cursor: { row: 3, column: 2, visible: true },
+    historyRows: padded.slice(0, padded.length - rows),
+    viewportRows: padded.slice(padded.length - rows),
+    cursor: { row: rows - viewport.length + 3, column: 2, visible: true },
   };
 }

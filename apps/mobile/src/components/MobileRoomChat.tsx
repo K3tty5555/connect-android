@@ -18,6 +18,11 @@ export interface MobileRoomChatProps {
   onImagePress?(messageId: string, imageIndex: number): void;
 }
 
+/** Automatic reloads after the content process dies, before the failure stands. */
+const MAX_CONTENT_RELOADS = 2;
+/** No `ready` by then is shown as a failure; a late `ready` still recovers. */
+const LOAD_DEADLINE_MS = 8_000;
+
 type HostMessage = { kind: 'ready' } | { kind: 'imagePress'; messageId: string; imageIndex: number };
 
 function parseHostMessage(raw: string): HostMessage | null {
@@ -52,8 +57,15 @@ export function MobileRoomChat({
   const webview = useRef<WebView>(null);
   const ready = useRef(false);
   const latestConfig = useRef('');
-  const [loadFailed, setLoadFailed] = useState(false);
+  /**
+   * `slow`: past the deadline without `ready`. Shown as a failure, but the page
+   * stays mounted, so a host that was only slow (a cold WebKit on a busy
+   * machine) still comes up. `broken`: the page itself could not load.
+   */
+  const [loadFailed, setLoadFailed] = useState<'slow' | 'broken' | null>(null);
   const [hostReady, setHostReady] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const reloads = useRef(0);
   const language = currentLanguage();
 
   latestConfig.current = JSON.stringify({
@@ -75,21 +87,38 @@ export function MobileRoomChat({
   }, [language, messages, omittedMessages, postConfig, theme.mode, userAvatar]);
 
   useEffect(() => {
-    if (hostReady || loadFailed) return;
-    const timer = setTimeout(() => setLoadFailed(true), 8_000);
+    if (hostReady || loadFailed !== null) return;
+    const timer = setTimeout(() => setLoadFailed('slow'), LOAD_DEADLINE_MS);
     return () => clearTimeout(timer);
-  }, [hostReady, loadFailed]);
+  }, [hostReady, loadAttempt, loadFailed]);
 
   const fail = (): void => {
     ready.current = false;
-    setLoadFailed(true);
+    setLoadFailed('broken');
+  };
+
+  // iOS reclaims WebContent processes (memory pressure, long in background);
+  // the page is local, so load it again rather than leave the room dead.
+  const contentProcessGone = (): void => {
+    ready.current = false;
+    setHostReady(false);
+    if (reloads.current >= MAX_CONTENT_RELOADS) {
+      setLoadFailed('broken');
+      return;
+    }
+    reloads.current += 1;
+    setLoadFailed(null);
+    setLoadAttempt((attempt) => attempt + 1);
+    webview.current?.reload();
   };
 
   const receive = (event: WebViewMessageEvent): void => {
     const message = parseHostMessage(event.nativeEvent.data);
     if (message?.kind === 'ready') {
       ready.current = true;
+      reloads.current = 0;
       setHostReady(true);
+      setLoadFailed(null);
       postConfig();
       return;
     }
@@ -99,7 +128,7 @@ export function MobileRoomChat({
     onImagePress?.(message.messageId, message.imageIndex);
   };
 
-  if (loadFailed) {
+  if (loadFailed === 'broken') {
     return (
       <View accessibilityRole="alert" style={[styles.error, { backgroundColor: theme.colors.bg }]}>
         <Text style={{ color: theme.colors.danger }}>{t('协作消息加载失败')}</Text>
@@ -127,7 +156,7 @@ export function MobileRoomChat({
       domStorageEnabled={false}
       javaScriptCanOpenWindowsAutomatically={false}
       mixedContentMode="never"
-      onContentProcessDidTerminate={fail}
+      onContentProcessDidTerminate={contentProcessGone}
       onError={fail}
       onMessage={receive}
       onShouldStartLoadWithRequest={(request) => (
@@ -143,7 +172,11 @@ export function MobileRoomChat({
       testID="mobile-room-chat"
         textInteractionEnabled
       />
-      {!hostReady ? (
+      {loadFailed === 'slow' ? (
+        <View accessibilityRole="alert" pointerEvents="none" style={[styles.loading, { backgroundColor: theme.colors.bg }]}>
+          <Text style={{ color: theme.colors.danger }}>{t('协作消息加载失败')}</Text>
+        </View>
+      ) : !hostReady ? (
         <View pointerEvents="none" style={[styles.loading, { backgroundColor: theme.colors.bg }]}>
           <Text style={{ color: theme.colors.text3 }}>{t('正在加载协作消息')}</Text>
         </View>

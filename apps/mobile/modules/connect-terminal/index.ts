@@ -32,7 +32,10 @@ export interface ConnectTerminalViewProps extends ViewProps {
 
 /** Commands the native view exposes on its ref. */
 export type ConnectTerminalCommand =
-  /** keepScroll: a rebuild of the panel being read keeps the reader's place. */
+  /**
+   * keepScroll: a rebuild of the panel being read, at the same cols and rows,
+   * keeps the reader's place. Without it the view opens on the newest row.
+   */
   | { kind: 'reset'; keepScroll?: boolean }
   | { kind: 'geometry'; cols: number; rows: number }
   | { kind: 'text'; data: string };

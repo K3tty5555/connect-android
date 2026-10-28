@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   AppState,
+  Modal,
   Settings as NativeSettings,
   StatusBar,
   StyleSheet,
@@ -187,9 +188,12 @@ import {
 import { TabletContentArea } from './src/tablet/TabletContentArea';
 import { TabletEmptyState } from './src/tablet/TabletEmptyState';
 import {
+  browserMirrorChrome,
   isTabletLayout,
   remapTabletFileTabs,
+  resolveTabletBrowserTab,
   tabletSidebarWidth,
+  type TabletBrowserTab,
 } from './src/tablet/tabletLayout';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { pickCollaborationAvatar } from './src/domain/collaborationAvatarPicker';
@@ -203,6 +207,26 @@ import {
   type LastScreen,
 } from './src/terminal/lastScreenStore';
 import { createExpoLastScreenFile } from './src/terminal/expoLastScreenFile';
+import {
+  BrowserLastFrameStore,
+  browserLastFrameFrom,
+  browserLastFrameMatches,
+  type BrowserLastFrame,
+} from './src/domain/browserLastFrame';
+import { createExpoBrowserLastFrameFile } from './src/domain/expoBrowserLastFrameFile';
+import {
+  browserFrameAckFor,
+  browserMirrorErrorPresentation,
+  clampBrowserInsertText,
+  initialBrowserMirrorState,
+  isBrowserKeyName,
+  reduceBrowserMirror,
+  type BrowserMirrorAction,
+  type BrowserMirrorState,
+} from './src/domain/browserMirrorSession';
+import { BrowserMirrorScreen } from './src/screens/BrowserMirrorScreen';
+import { bytesToBase64 } from './src/net/bytes';
+import { MOBILE_CAPABILITY_PROBE_V2_REQUEST_ID } from '../../src/shared/types';
 import { ResumePreviewScreen } from './src/screens/ResumePreviewScreen';
 import { resumePreviewScreen, sessionLastScreen } from './src/terminal/lastScreenPresentation';
 import { useOperationState } from './src/domain/useOperationState';
@@ -212,13 +236,15 @@ import { playInteractionFeedback } from './src/theme/interactionFeedback';
 import {
   NATIVE_TERMINAL_GRID_FIXTURE,
   NATIVE_TERMINAL_GRID_HISTORY_FIXTURE,
-  swiftTermSequenceFixture,
+  nativeGridSequenceFixture,
+  nativeGridSequenceStepMs,
 } from './src/fixtures/nativeTerminalGridFixture';
 import { STORE_SHOT } from './src/storeShot';
 import {
   STORE_SHOT_ROOM,
   STORE_SHOT_SAS,
   STORE_SHOT_WORKSPACE,
+  storeShotBrowserPanels,
   storeShotRoomMessages,
   storeShotSession,
   storeShotTerminalFrame,
@@ -237,8 +263,12 @@ const NATIVE_GRID_DEMO_ROUTE = NATIVE_GRID_DEMO
   ? NativeSettings.get('ConnectNativeGridRoute')
   : null;
 // seq-* 夹具按真实桥的到达顺序分两帧：先只有视口，随后带长历史（MOBILE-CHAT-NOT-AT-LATEST-1012）。
+// rewrap-* 夹具先给长历史、留出上翻时间，再整帧重建（IPAD-SIDEBAR-SCROLL-TOP-1025）。
+const NATIVE_GRID_DEMO_FIXTURE_NAME = NATIVE_GRID_DEMO
+  ? String(NativeSettings.get('ConnectNativeGridFixture') ?? '')
+  : '';
 const NATIVE_GRID_DEMO_SEQUENCE = NATIVE_GRID_DEMO
-  ? swiftTermSequenceFixture(String(NativeSettings.get('ConnectNativeGridFixture') ?? ''))
+  ? nativeGridSequenceFixture(NATIVE_GRID_DEMO_FIXTURE_NAME)
   : null;
 const NATIVE_GRID_DEMO_FRAME = NATIVE_GRID_DEMO_SEQUENCE?.[0] ?? (NATIVE_GRID_DEMO
   && NativeSettings.get('ConnectNativeGridFixture') === 'history'
@@ -253,6 +283,7 @@ function storeShotRoute(): MobileRoute {
     case 'sessions':
     case 'create':
     case 'files':
+    case 'web':
       return { kind: 'project', workspaceCapability: STORE_SHOT_WORKSPACE };
     default:
       return { kind: 'root', tab: 'home' };
@@ -394,6 +425,40 @@ export default function App(): React.ReactElement {
   const [relayProfile, setRelayProfile] = useState<PairedDesktopProfile['relay'] | null>(null);
   const desktopKeyRef = useRef<string | null>(null);
   desktopKeyRef.current = desktopKey;
+  // ── 网页镜像（ADR-003 §19）────────────────────────────────────────────────
+  // 观看器状态走域层 reducer；这里只保存放与接线。最后一帧缓存沿用终端「最后一屏」口径。
+  const [browserMirror, setBrowserMirror] = useState<BrowserMirrorState>(
+    // UI 测试的 `web` 场景：桌面目录由夹具供，App 仍然不连任何电脑。
+    STORE_SHOT?.scene === 'web'
+      ? { ...initialBrowserMirrorState, panels: storeShotBrowserPanels(STORE_SHOT.locale) }
+      : initialBrowserMirrorState,
+  );
+  const browserMirrorRef = useRef(browserMirror);
+  browserMirrorRef.current = browserMirror;
+  const [webMirrorSupported, setWebMirrorSupported] = useState(STORE_SHOT?.scene === 'web');
+  const [browserNotice, setBrowserNotice] = useState<{ tone: 'info' | 'warn'; text: string } | null>(null);
+  const browserNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [browserLastFrameStore] = useState(() => new BrowserLastFrameStore(
+    DEMO_BUILD
+      ? { read: () => null, write: () => {}, remove: () => {} }
+      : createExpoBrowserLastFrameFile(),
+  ));
+  const [browserCachedFrame, setBrowserCachedFrame] = useState<BrowserLastFrame | null>(() => null);
+  const browserCacheFingerprintRef = useRef<number>(0);
+
+  const dispatchBrowserMirror = useCallback((action: BrowserMirrorAction | readonly BrowserMirrorAction[]): void => {
+    setBrowserMirror((previous) => reduceBrowserMirror(previous, action));
+  }, []);
+
+  const showBrowserNotice = useCallback((tone: 'info' | 'warn', text: string): void => {
+    setBrowserNotice({ tone, text });
+    if (browserNoticeTimer.current !== null) clearTimeout(browserNoticeTimer.current);
+    // 一行提示 4 秒后自己退场：不打断观看，也不需要用户去关。
+    browserNoticeTimer.current = setTimeout(() => {
+      browserNoticeTimer.current = null;
+      setBrowserNotice(null);
+    }, 4_000);
+  }, []);
   const navigationRef = useRef(navigation);
   const routeRef = useRef(route);
   const routeCatalogSnapshotRef = useRef<MobileRouteCatalogSnapshot | null>(null);
@@ -543,7 +608,10 @@ export default function App(): React.ReactElement {
     : NATIVE_GRID_DEMO ? { frame: NATIVE_GRID_DEMO_FRAME } : null);
   useEffect(() => {
     if (!NATIVE_GRID_DEMO_SEQUENCE) return;
-    const timer = setTimeout(() => setNativeGridPresentation({ frame: NATIVE_GRID_DEMO_SEQUENCE[1]! }), 1500);
+    const timer = setTimeout(
+      () => setNativeGridPresentation({ frame: NATIVE_GRID_DEMO_SEQUENCE[1]! }),
+      nativeGridSequenceStepMs(NATIVE_GRID_DEMO_FIXTURE_NAME),
+    );
     return () => clearTimeout(timer);
   }, []);
   const attachedPanelIdRef = useRef<string | null>(null);
@@ -1070,9 +1138,28 @@ export default function App(): React.ReactElement {
         onAuthorizationRejected: () => {
           void forgetPairingRef.current?.('电脑已吊销这台手机的授权，请重新配对。');
         },
+        onBrowserFrame: (frame) => {
+          const view = browserMirrorRef.current.view;
+          if (view === null) return;
+          dispatchBrowserMirror({
+            type: 'frame',
+            frame: {
+              seq: frame.header.seq,
+              jpegBase64: bytesToBase64(frame.jpeg),
+              byteLength: frame.jpeg.byteLength,
+              viewportWidth: frame.header.viewportWidth,
+              viewportHeight: frame.header.viewportHeight,
+              encodedWidth: frame.header.encodedWidth,
+              encodedHeight: frame.header.encodedHeight,
+              sharp: frame.header.sharp,
+            },
+          });
+        },
         onState: (connection) => {
           if (connection === 'connected') {
             setPairingRequired(false);
+            // 断线保持后回来：网页观看器自动恢复（桌面按 §11 恢复离线持有）。
+            restartBrowserViewRef.current();
             if (!roomSendAmbiguousRef.current && !terminalWriteAmbiguousRef.current) {
               setBridgeError(null);
             }
@@ -1090,6 +1177,11 @@ export default function App(): React.ReactElement {
             || connection === 'confirming'
             || connection === 'reconnecting'
           ) {
+            // 断线保持（ADR-003 §11）：观看器画面留着、标记停止；重连后自动恢复。
+            if (browserMirrorRef.current.view !== null) {
+              dispatchBrowserMirror({ type: 'connection_lost' });
+              setWebMirrorSupported(false);
+            }
             if (connection !== 'confirming') {
               terminalRendererRetryGenerationRef.current += 1;
               rendererRetry.cancel();
@@ -1328,6 +1420,71 @@ export default function App(): React.ReactElement {
         },
         onEvent: (event) => {
           if (workspaceFileTransport.handle(event)) return;
+          // ── 网页镜像（ADR-003 §19）：列表/状态/暂停事件进域层 reducer ──
+          if (
+            event.kind === 'browserList'
+            || event.kind === 'browserViewStarted'
+            || event.kind === 'browserViewStopped'
+            || event.kind === 'browserState'
+            || event.kind === 'browserPaused'
+          ) {
+            if (event.kind === 'browserList') {
+              dispatchBrowserMirror({ type: 'panels_changed', panels: event.panels });
+            } else if (event.kind === 'browserViewStarted') {
+              dispatchBrowserMirror({
+                type: 'view_started',
+                browserCapability: event.browserCapability,
+                tier: event.tier,
+              });
+            } else if (event.kind === 'browserViewStopped') {
+              dispatchBrowserMirror({
+                type: 'view_stopped',
+                browserCapability: event.browserCapability,
+                reason: event.reason,
+              });
+              if (event.reason === 'panel_closed') showBrowserNotice('warn', '网页已在电脑上关闭');
+            } else if (event.kind === 'browserState') {
+              dispatchBrowserMirror({
+                type: 'state',
+                browserCapability: event.browserCapability,
+                title: event.title,
+                loading: event.loading,
+                canGoBack: event.canGoBack,
+                canGoForward: event.canGoForward,
+                owner: event.owner,
+                epoch: event.epoch,
+                controlledByThisDevice: event.controlledByThisDevice ?? false,
+              });
+            } else {
+              dispatchBrowserMirror({
+                type: 'paused',
+                browserCapability: event.browserCapability,
+                reason: event.reason,
+              });
+            }
+            return;
+          }
+          if (event.kind === 'workspaceList' && event.requestId === MOBILE_CAPABILITY_PROBE_V2_REQUEST_ID) {
+            const client = bridge.current;
+            // 探针回复先于本回调到达 BridgeClient：直接读它刚更新的能力位。
+            setWebMirrorSupported(client?.supportsWebMirror === true);
+            if (client !== null && client.supportsWebMirror) {
+              void client.listBrowserPanels().catch(() => undefined);
+            }
+          }
+          // browser* 错误没有可关联的 requestId（输入类命令可不带）：按码识别。
+          if (event.kind === 'error' && event.code.startsWith('browser_')) {
+            const presentation = browserMirrorErrorPresentation(event.code, event.category);
+            if (presentation.kind === 'message') showBrowserNotice(presentation.tone, presentation.text);
+            if (
+              event.code === 'browser_capability_expired'
+              || event.code === 'browser_panel_closed'
+              || event.code === 'not_attached'
+            ) {
+              void bridge.current?.listBrowserPanels().catch(() => undefined);
+            }
+            return;
+          }
           if (terminalImageTransfer.handle(event)) return;
           if (roomImageTransfer.handle(event)) return;
           if (
@@ -2140,6 +2297,7 @@ export default function App(): React.ReactElement {
       clearProfile: async () => {
         // First, so a later step failing cannot leave terminal content behind.
         lastScreenStore.clear();
+        browserLastFrameStore.clear();
         await profileStore.clear();
         await resumeStore.clear();
       },
@@ -2201,6 +2359,7 @@ export default function App(): React.ReactElement {
         resumeTargetRef.current = null;
         setResumeTarget(null);
         lastScreenStore.clear();
+        browserLastFrameStore.clear();
         lastScreenFingerprintRef.current = null;
         setLastScreen(null);
         setDesktopKey(null);
@@ -2261,6 +2420,7 @@ export default function App(): React.ReactElement {
       if (!active) return;
       if (stored === null) {
         lastScreenStore.clear();
+        browserLastFrameStore.clear();
         if (cleanupReason === 'unsupported_address') {
           setPairingRequired(true);
           setBridgeError('配对资料中的地址不是 Connect 支持的私网地址，请重新配对。');
@@ -2274,6 +2434,7 @@ export default function App(): React.ReactElement {
       const saved = lastScreenStore.load();
       if (saved !== null && saved.desktopKey !== desktopKeyOf(stored)) {
         lastScreenStore.clear();
+        browserLastFrameStore.clear();
         setLastScreen(null);
       }
       void connectStoredProfile({
@@ -2570,6 +2731,7 @@ export default function App(): React.ReactElement {
   const paired = (next: PairedDesktopProfile): void => {
     setBridgeError(null);
     lastScreenStore.clear();
+    browserLastFrameStore.clear();
     lastScreenFingerprintRef.current = null;
     setLastScreen(null);
     setDesktopKey(desktopKeyOf(next));
@@ -2923,6 +3085,17 @@ export default function App(): React.ReactElement {
         // A day may have passed in the background: the promise is about the
         // disk, so the expiry check runs now, not at the next cold start.
         setLastScreen(lastScreenStore.load());
+        const cachedBrowserFrame = browserLastFrameStore.load();
+        setBrowserCachedFrame(
+          cachedBrowserFrame !== null
+          && browserLastFrameMatches(
+            cachedBrowserFrame,
+            { desktopKey: desktopKeyRef.current ?? '' },
+            Date.now(),
+          )
+            ? cachedBrowserFrame
+            : null,
+        );
       }
     });
     return () => subscription.remove();
@@ -3004,6 +3177,7 @@ export default function App(): React.ReactElement {
       // Too large to keep whole: an older picture of it would pass for the last one.
       lastScreenFingerprintRef.current = null;
       lastScreenStore.clear();
+      browserLastFrameStore.clear();
       return;
     }
     const fingerprint = next.screen.kind === 'grid'
@@ -3061,6 +3235,10 @@ export default function App(): React.ReactElement {
   const reportTerminalViewport = useCallback((cols: number, rows: number, transient?: boolean): void => {
     ptyGeometry.report({ cols, rows }, transient);
     if (!transient) setPhoneViewportCols(cols);
+    // 截图模式没有 Mac 来跟随手机改 PTY 形状，由夹具按本机报来的形状重排（STORE-SHOTS-SCREENSHOT-MODE-1020）。
+    if (STORE_SHOT?.scene === 'terminal' && !transient) {
+      setNativeGridPresentation({ frame: storeShotTerminalFrame(STORE_SHOT.locale, { cols, rows }) });
+    }
   }, [ptyGeometry]);
   useEffect(() => {
     if (state.ownership === 'mobile_owned') ptyGeometry.settle();
@@ -3367,6 +3545,9 @@ export default function App(): React.ReactElement {
       currentBridge.send({ kind: 'listPanels', requestId }),
       currentBridge.send({ kind: 'listRooms', requestId }),
     ];
+    if (currentBridge.supportsWebMirror) {
+      sends.push(currentBridge.listBrowserPanels().catch(() => undefined));
+    }
     if (refreshTerminal && snapshot.activePanelId !== null) {
       beginTerminalSwap(snapshot.activePanelId, requestId, true);
       sends.push(currentBridge.attach(snapshot.activePanelId, true, requestId));
@@ -3381,6 +3562,191 @@ export default function App(): React.ReactElement {
       setBridgeError('项目与会话刷新失败，请检查连接。');
     });
   };
+
+  // ── 网页镜像（ADR-003 §19）：观看、Ack、接管与输入的发送层 ──────────────────
+  const browserCacheLastWriteRef = useRef(0);
+
+  const saveBrowserLastFrame = useCallback((force = false): void => {
+    const view = browserMirrorRef.current.view;
+    const key = desktopKeyRef.current;
+    if (view === null || key === null || view.frame === null) return;
+    const nowMs = Date.now();
+    // 逐帧落盘太吵：5 秒一档，关闭观看器时强制一次。
+    if (!force && nowMs - browserCacheLastWriteRef.current < 5_000) return;
+    const entry = browserMirrorRef.current.panels.find(
+      (panel) => panel.browserCapability === view.browserCapability,
+    );
+    const cached = browserLastFrameFrom({
+      desktopKey: key,
+      workspaceLabel: entry?.workspaceLabel ?? '',
+      title: view.title.length > 0 ? view.title : (entry?.title ?? ' '),
+      jpegBase64: view.frame.jpegBase64,
+      byteLength: view.frame.byteLength,
+      viewportWidth: view.frame.viewportWidth,
+      viewportHeight: view.frame.viewportHeight,
+      encodedWidth: view.frame.encodedWidth,
+      encodedHeight: view.frame.encodedHeight,
+    }, nowMs);
+    if (cached === null) {
+      browserLastFrameStore.clear();
+      return;
+    }
+    browserCacheLastWriteRef.current = nowMs;
+    browserCacheFingerprintRef.current = view.frame.seq;
+    browserLastFrameStore.save(cached);
+  }, [browserLastFrameStore]);
+
+  const openBrowserViewer = useCallback((browserCapability: string): void => {
+    const key = desktopKeyRef.current;
+    const cached = key === null ? null : browserLastFrameStore.load();
+    setBrowserCachedFrame(
+      cached !== null && key !== null && browserLastFrameMatches(cached, { desktopKey: key }, Date.now())
+        ? cached
+        : null,
+    );
+    browserCacheLastWriteRef.current = 0;
+    dispatchBrowserMirror({ type: 'open', browserCapability });
+    const client = bridge.current;
+    if (client !== null && client.state === 'connected' && client.supportsWebMirror) {
+      void client.startBrowserView(browserCapability).catch(() => undefined);
+    }
+  }, [browserLastFrameStore, dispatchBrowserMirror]);
+
+  const closeBrowserViewer = useCallback((): void => {
+    const view = browserMirrorRef.current.view;
+    if (view !== null) {
+      const client = bridge.current;
+      if (client !== null && client.state === 'connected' && client.supportsWebMirror) {
+        void client.stopBrowserView(view.browserCapability).catch(() => undefined);
+      }
+      saveBrowserLastFrame(true);
+    }
+    dispatchBrowserMirror({ type: 'close' });
+  }, [dispatchBrowserMirror, saveBrowserLastFrame]);
+
+  const ackBrowserDisplayedFrame = useCallback((browserCapability: string, seq: number): void => {
+    // 域层决定这一帧要不要确认（每帧一次、只在活动流上）。
+    const ack = browserFrameAckFor(browserMirrorRef.current, seq);
+    if (ack === null) return;
+    dispatchBrowserMirror({ type: 'acknowledged', seq });
+    bridge.current?.ackBrowserFrame(ack.browserCapability, ack.seq).catch(() => undefined);
+    saveBrowserLastFrame();
+  }, [dispatchBrowserMirror, saveBrowserLastFrame]);
+
+  const takeoverBrowserMirror = useCallback((browserCapability: string, currentEpoch: number | undefined): void => {
+    const client = bridge.current;
+    if (client === null || !client.supportsWebMirror) return;
+    void client.takeoverBrowser(
+      browserCapability,
+      createMobileRequestId(),
+      currentEpoch,
+    ).catch(() => undefined);
+  }, []);
+
+  const browserInputBase = (): {
+    browserCapability: string;
+    epoch: number;
+    baseFrameSeq: number;
+  } | null => {
+    const view = browserMirrorRef.current.view;
+    if (view === null || view.epoch === null || view.frame === null) return null;
+    return {
+      browserCapability: view.browserCapability,
+      epoch: view.epoch,
+      baseFrameSeq: view.frame.seq,
+    };
+  };
+
+  const sendBrowserPointer = useCallback((
+    _browserCapability: string,
+    baseFrameSeq: number,
+    action: 'tap' | 'down' | 'move' | 'up',
+    x: number,
+    y: number,
+  ): void => {
+    const base = browserInputBase();
+    if (base === null || base.baseFrameSeq !== baseFrameSeq) return;
+    void bridge.current?.sendBrowserInput({
+      ...base,
+      inputType: 'pointer',
+      pointer: { action, x, y },
+    }).catch(() => undefined);
+  }, []);
+
+  const sendBrowserWheel = useCallback((
+    _browserCapability: string,
+    baseFrameSeq: number,
+    deltaX: number,
+    deltaY: number,
+  ): void => {
+    const base = browserInputBase();
+    if (base === null || base.baseFrameSeq !== baseFrameSeq) return;
+    void bridge.current?.sendBrowserInput({
+      ...base,
+      inputType: 'wheel',
+      wheel: { deltaX, deltaY },
+    }).catch(() => undefined);
+  }, []);
+
+  const sendBrowserInsertText = useCallback((
+    _browserCapability: string,
+    baseFrameSeq: number,
+    text: string,
+  ): void => {
+    const base = browserInputBase();
+    if (base === null || base.baseFrameSeq !== baseFrameSeq) return;
+    const bounded = clampBrowserInsertText(text);
+    if (bounded === null) return;
+    void bridge.current?.sendBrowserInput({
+      ...base,
+      inputType: 'insertText',
+      text: bounded,
+    }).catch(() => undefined);
+  }, []);
+
+  const sendBrowserKey = useCallback((
+    _browserCapability: string,
+    baseFrameSeq: number,
+    key: string,
+  ): void => {
+    const base = browserInputBase();
+    if (base === null || base.baseFrameSeq !== baseFrameSeq) return;
+    if (!isBrowserKeyName(key)) return;
+    void bridge.current?.sendBrowserInput({
+      ...base,
+      inputType: 'key',
+      key,
+    }).catch(() => undefined);
+  }, []);
+
+  const navBrowserMirror = useCallback((
+    browserCapability: string,
+    action: 'back' | 'forward' | 'reload',
+  ): void => {
+    const base = browserInputBase();
+    if (base === null || base.browserCapability !== browserCapability) return;
+    void bridge.current?.sendBrowserNav(
+      browserCapability,
+      base.epoch,
+      action,
+    ).catch(() => undefined);
+  }, []);
+
+  /** 暂停后的非输入通道恢复：重开观看流（桌面据此恢复离线持有，ADR-003 §11）。 */
+  const resumeBrowserMirrorView = useCallback((): void => {
+    const view = browserMirrorRef.current.view;
+    const client = bridge.current;
+    if (view === null || client === null || !client.supportsWebMirror) return;
+    if (client.state !== 'connected') return;
+    void client.startBrowserView(view.browserCapability).catch(() => undefined);
+  }, []);
+
+  const restartBrowserViewRef = useRef((): void => {
+    const view = browserMirrorRef.current.view;
+    const client = bridge.current;
+    if (view === null || client === null || !client.supportsWebMirror) return;
+    void client.startBrowserView(view.browserCapability).catch(() => undefined);
+  });
 
   const selectPanel = (panelId: string, workspaceCapability?: string): void => {
     const target = resolvePanelSelection(
@@ -3678,6 +4044,51 @@ export default function App(): React.ReactElement {
     if (tabletActiveFile !== null && predicate(tabletActiveFile)) setTabletActiveFileRef(null);
   };
 
+  // —— ADR-003 §19：iPad 主区里的网页镜像标签（手机仍是全屏 Modal）——
+  const [tabletBrowserTab, setTabletBrowserTab] = useState<TabletBrowserTab | null>(null);
+  const [tabletBrowserSelected, setTabletBrowserSelected] = useState(false);
+  const webMirrorOnline = webMirrorSupported && presentedConnection === 'online';
+  useEffect(() => {
+    // 与桌面目录对账：面板在电脑上关掉就撤标签，标题/所属项目跟着刷新（同值返回原对象，不会抖动）。
+    setTabletBrowserTab((previous) => resolveTabletBrowserTab(previous, browserMirror.panels, webMirrorOnline));
+  }, [browserMirror.panels, webMirrorOnline]);
+  const tabletWorkspaceBrowserTab = tabletBrowserTab !== null
+    && tabletBrowserTab.workspaceCapability === tabletWorkspace?.workspaceCapability
+    ? tabletBrowserTab
+    : null;
+  useEffect(() => {
+    // 标签被撤掉、或当前项目已经换走：停流并取消选中，绝不留一块还在收帧的隐藏画面。
+    if (!tabletBrowserSelected || tabletWorkspaceBrowserTab !== null) return;
+    setTabletBrowserSelected(false);
+    closeBrowserViewer();
+  }, [closeBrowserViewer, tabletBrowserSelected, tabletWorkspaceBrowserTab]);
+  const tabletBrowserActive = tabletBrowserSelected
+    && tabletWorkspaceBrowserTab !== null
+    && browserMirror.view !== null;
+  /** 切到别的标签：停推流（带宽红线），标签留着——回来时先垫上次画面再重开。 */
+  const leaveTabletBrowser = (): void => {
+    if (!tabletBrowserSelected) return;
+    setTabletBrowserSelected(false);
+    closeBrowserViewer();
+  };
+  const openTabletBrowser = (
+    browserCapability: string,
+    title: string,
+    workspaceCapability: string,
+  ): void => {
+    setTabletBrowserTab({ browserCapability, title, workspaceCapability });
+    if (tabletBrowserSelected && browserMirrorRef.current.view?.browserCapability === browserCapability) return;
+    setTabletActiveFileRef(null);
+    setTabletBrowserSelected(true);
+    openBrowserViewer(browserCapability);
+  };
+  /** 彻底关掉（标签上的 ×、页内返回键、手机 Modal 返回）：停流并撤标签。 */
+  const dismissBrowserMirror = (): void => {
+    setTabletBrowserTab(null);
+    setTabletBrowserSelected(false);
+    closeBrowserViewer();
+  };
+
   const sessionState = useMemo(() => route.kind === 'session'
     ? {
         ...state,
@@ -3792,6 +4203,12 @@ export default function App(): React.ReactElement {
     setRelayProfile(next.relay ?? null);
     bridge.current?.connect(next);
   };
+
+  // 宽窗口进主区标签，窄窗口（分屏回落 iPhone 版式）仍是全屏 Modal。
+  const browserChrome = browserMirrorChrome({
+    tabletLayout,
+    open: browserMirror.view !== null,
+  });
 
   const routeView = (
       <RouteTransitionView
@@ -3910,6 +4327,9 @@ export default function App(): React.ReactElement {
             theme={theme}
             workspace={routeWorkspace}
             panels={routePanels}
+            browserPanels={browserMirror.panels}
+            webMirrorSupported={webMirrorSupported && presentedConnection === 'online'}
+            onBrowser={openBrowserViewer}
             refreshStatus={refreshStatus}
             surfaceCreateStatus={surfaceCreateStatus}
             surfaceCreateError={surfaceCreateError}
@@ -4172,19 +4592,31 @@ export default function App(): React.ReactElement {
                           && (tab.subPath === subPath || tab.subPath.startsWith(`${subPath}/`))
                         ))}
                         onModeChange={setTabletSidebarMode}
-                        onOpenFile={openTabletFile}
+                        onOpenFile={(workspaceCapability, subPath) => {
+                          leaveTabletBrowser();
+                          openTabletFile(workspaceCapability, subPath);
+                        }}
                         onOpenProject={(workspaceCapability) => {
+                          leaveTabletBrowser();
                           setTabletActiveFileRef(null);
                           navigate({ type: 'open_project', workspaceCapability }, ['workspace_switch']);
                         }}
                         onOpenSession={(panelId, workspaceCapability) => {
+                          leaveTabletBrowser();
                           setTabletActiveFileRef(null);
                           selectPanel(panelId, workspaceCapability);
                         }}
                         onOpenSettings={() => {
+                          leaveTabletBrowser();
                           setTabletActiveFileRef(null);
                           navigate({ type: 'select_tab', tab: 'settings' });
                         }}
+                        activeBrowserCapability={tabletBrowserActive
+                          ? tabletWorkspaceBrowserTab?.browserCapability ?? null
+                          : null}
+                        browserPanels={browserMirror.panels}
+                        onOpenBrowser={openTabletBrowser}
+                        webMirrorSupported={webMirrorOnline}
                         onRefresh={startRefresh}
                         panels={state.panels}
                         presentedConnection={presentedConnection}
@@ -4210,14 +4642,26 @@ export default function App(): React.ReactElement {
                           onCreateSession={() => {
                             if (tabletWorkspace !== null) setTabletCreateCapability(tabletWorkspace.workspaceCapability);
                           }}
-                          onSelectFile={(tab) => setTabletActiveFileRef({
-                            workspaceLabel: tab.workspaceLabel,
-                            subPath: tab.subPath,
-                          })}
+                          onSelectFile={(tab) => {
+                            leaveTabletBrowser();
+                            setTabletActiveFileRef({
+                              workspaceLabel: tab.workspaceLabel,
+                              subPath: tab.subPath,
+                            });
+                          }}
                           onSelectSession={(panel) => {
+                            leaveTabletBrowser();
                             setTabletActiveFileRef(null);
                             selectPanel(panel.panelId, panel.workspaceCapability);
                           }}
+                          browserActive={tabletBrowserActive}
+                          browserTab={tabletWorkspaceBrowserTab}
+                          onCloseBrowser={dismissBrowserMirror}
+                          onSelectBrowser={(tab) => openTabletBrowser(
+                            tab.browserCapability,
+                            tab.title,
+                            tab.workspaceCapability,
+                          )}
                           onToggleSidebar={() => setTabletSidebarVisible((visible) => !visible)}
                           sessions={tabletWorkspacePanels}
                           sidebarVisible={tabletSidebarVisible}
@@ -4247,6 +4691,29 @@ export default function App(): React.ReactElement {
                               />
                             </SafeAreaView>
                           ) : null}
+                          {browserChrome === 'pane' && tabletBrowserActive && tabletActiveFile === null ? (
+                            <View style={[StyleSheet.absoluteFill, { backgroundColor: theme.colors.bg }]}>
+                              <BrowserMirrorScreen
+                                cachedFrame={browserCachedFrame}
+                                canWrite={state.canControlInput}
+                                chrome="pane"
+                                notice={browserNotice}
+                                onAckFrame={ackBrowserDisplayedFrame}
+                                onBack={dismissBrowserMirror}
+                                onInsertText={sendBrowserInsertText}
+                                onKey={sendBrowserKey}
+                                onNav={navBrowserMirror}
+                                onPointer={sendBrowserPointer}
+                                onResume={resumeBrowserMirrorView}
+                                onTakeover={takeoverBrowserMirror}
+                                onWheel={sendBrowserWheel}
+                                online={presentedConnection === 'online'}
+                                state={browserMirror}
+                                theme={theme}
+                                workspaceLabel={tabletWorkspace?.label ?? ''}
+                              />
+                            </View>
+                          ) : null}
                         </TabletContentArea>
                       </View>
                     </View>
@@ -4273,6 +4740,33 @@ export default function App(): React.ReactElement {
                   open={pairingOpen}
                   theme={theme}
                 />
+                {browserChrome === 'modal' ? (
+                  <Modal
+                    animationType="slide"
+                    onRequestClose={dismissBrowserMirror}
+                    presentationStyle="fullScreen"
+                    visible
+                  >
+                    <BrowserMirrorScreen
+                      state={browserMirror}
+                      theme={theme}
+                      workspaceLabel={routeWorkspace?.label ?? ''}
+                      online={presentedConnection === 'online'}
+                      canWrite={state.canControlInput}
+                      notice={browserNotice}
+                      cachedFrame={browserCachedFrame}
+                      onBack={dismissBrowserMirror}
+                      onAckFrame={ackBrowserDisplayedFrame}
+                      onTakeover={takeoverBrowserMirror}
+                      onNav={navBrowserMirror}
+                      onPointer={sendBrowserPointer}
+                      onWheel={sendBrowserWheel}
+                      onInsertText={sendBrowserInsertText}
+                      onKey={sendBrowserKey}
+                      onResume={resumeBrowserMirrorView}
+                    />
+                  </Modal>
+                ) : null}
               </View>
             </KeyboardProvider>
           </ReducedMotionProvider>

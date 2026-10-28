@@ -241,7 +241,10 @@ class ConnectTerminalView(context: Context, appContext: AppContext) : ExpoView(c
     }
     if (replaced) {
       // 重放后停在最新行；重建正在读的面板时回到读者原来的位置。
-      termView.topRow = max(termView.minTopRow, -(keepFromBottom ?: 0))
+      // 锚点越过重建后历史的顶端，说明原位置已不存在：回到最新，而不是夹到最旧一行
+      //（IPAD-SIDEBAR-SCROLL-TOP-1025，与 iOS apply 同义）。
+      val anchored = -(keepFromBottom ?: 0)
+      termView.topRow = if (anchored < termView.minTopRow) 0 else anchored
     }
     termView.onScreenUpdated()
     if (operationId != null) markPainted(operationId)

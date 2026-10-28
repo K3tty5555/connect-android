@@ -11,6 +11,7 @@ import type {
   SessionWorkspaceSummary,
   SurfaceKind,
 } from '../domain/session';
+import type { BrowserPanelEntry } from '../domain/browserMirrorSession';
 import type { ConnectTheme } from '../theme/theme';
 import { MAX_COMPACT_FONT_SCALE, RADIUS, SPACE } from '../theme/tokens';
 import { KindIcon } from '../components/KindIcon';
@@ -64,6 +65,9 @@ export function ProjectScreen({
   filesNeedDesktopUpdate = false,
   initialSection,
   panelStatuses = NO_PANEL_STATUSES,
+  browserPanels = [],
+  webMirrorSupported = false,
+  onBrowser,
 }: {
   /** The desktop's lamp per panel; absent where the desktop does not offer it. */
   panelStatuses?: Readonly<Record<string, MobilePanelStatus>>;
@@ -89,6 +93,10 @@ export function ProjectScreen({
   filesNeedDesktopUpdate?: boolean;
   /** App Store screenshot scene only. */
   initialSection?: ProjectSection;
+  /** ADR-003 §19：桌面正在打开的网页面板；只在桌面声明 web-mirror-v1 时出现。 */
+  browserPanels?: readonly BrowserPanelEntry[];
+  webMirrorSupported?: boolean;
+  onBrowser?(browserCapability: string): void;
 }): React.ReactElement {
   const [createSheetOpen, setCreateSheetOpen] = useState(initialCreateSheetOpen);
   const filesAvailable = filesSupported && fileTransport !== null && !state.isDemo;
@@ -104,9 +112,14 @@ export function ProjectScreen({
   } | null>(null);
   const styles = createStyles(theme);
   const reducedMotion = useReducedMotion();
+  const visibleBrowserPanels = webMirrorSupported ? browserPanels : [];
+  const listEntries: ReadonlyArray<SessionPanelSummary | BrowserPanelEntry> = [
+    ...panels,
+    ...visibleBrowserPanels,
+  ];
   const sessionList = useStableListEntries(
-    panels,
-    (panel) => panel.panelId,
+    listEntries,
+    (panel) => ('browserCapability' in panel ? panel.browserCapability : panel.panelId),
     reducedMotion,
   );
   useAndroidBack('', () => {
@@ -243,6 +256,30 @@ export function ProjectScreen({
             }
             const item = entry.item;
             const readOnly = state.connection !== 'online';
+            if ('browserCapability' in item) {
+              // 网页面板行与终端会话同构（设计 §5.5）：图标 + 标题 + 一行说明，不暴露 URL。
+              return (
+                <StableMotionRow
+                  animateEnter={entry.entering}
+                  reducedMotion={reducedMotion}
+                  testID="session-motion-row"
+                >
+                  <MotionPressable
+                    accessibilityLabel={t('打开网页 {label}', { label: item.title })}
+                    accessibilityRole="button"
+                    feedback="selection"
+                    onPress={() => onBrowser?.(item.browserCapability)}
+                    style={[styles.sessionRow, readOnly ? styles.disabled : null]}
+                  >
+                    <KindIcon kind="web" size={23} theme={theme} />
+                    <View style={styles.sessionCopy}>
+                      <Text numberOfLines={1} style={styles.sessionLabel}>{item.title}</Text>
+                      <Text style={styles.sessionDetail}>{t('网页')}</Text>
+                    </View>
+                  </MotionPressable>
+                </StableMotionRow>
+              );
+            }
             const selected = item.panelId === state.activePanelId;
             return (
               <StableMotionRow

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Connect",
     "slug": "connect-mobile",
-    "version": "1.0.14",
+    "version": "1.0.15",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "icon": "./assets/icon.png",
@@ -44,7 +44,7 @@
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#16181d"
       },
-      "versionCode": 10,
+      "versionCode": 11,
       "allowBackup": false
     },
     "plugins": [

@@ -10,6 +10,7 @@ import type {
   SessionViewModel,
   SessionWorkspaceSummary,
 } from '../domain/session';
+import type { BrowserPanelEntry } from '../domain/browserMirrorSession';
 import { panelDisplayLabel } from '../domain/panelLabel';
 import type { WorkspaceFileTransport } from '../domain/workspaceFiles';
 import { ConnectionBar } from '../components/ConnectionBar';
@@ -32,6 +33,7 @@ export type TabletSidebarMode = 'projects' | 'files';
  * 资源管理器。只是排版不同，所有动作都回到 App 里与 iPhone 同一套处理函数。
  */
 const NO_PANEL_STATUSES: Readonly<Record<string, MobilePanelStatus>> = {};
+const NO_BROWSER_PANELS: readonly BrowserPanelEntry[] = [];
 
 export function TabletSidebar({
   state,
@@ -57,6 +59,10 @@ export function TabletSidebar({
   onFileRemoved,
   onOpenSettings,
   panelStatuses = NO_PANEL_STATUSES,
+  browserPanels = NO_BROWSER_PANELS,
+  webMirrorSupported = false,
+  activeBrowserCapability = null,
+  onOpenBrowser,
 }: {
   /** The desktop's lamp per panel (MOBILE-SESSION-RUN-STATE-01). */
   panelStatuses?: Readonly<Record<string, MobilePanelStatus>>;
@@ -83,12 +89,19 @@ export function TabletSidebar({
   onOpenFile(workspaceCapability: string, subPath: string): void;
   onFileRemoved(workspaceCapability: string, subPath: string): void;
   onOpenSettings(): void;
+  /** ADR-003 §19：桌面正在打开的网页面板；只在桌面声明 web-mirror-v1 且在线时列出。 */
+  browserPanels?: readonly BrowserPanelEntry[];
+  webMirrorSupported?: boolean;
+  activeBrowserCapability?: string | null;
+  onOpenBrowser?(browserCapability: string, title: string, workspaceCapability: string): void;
 }): React.ReactElement {
   const styles = createStyles(theme);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const online = state.connection === 'online';
   const canWrite = online && state.canControlInput && !state.isDemo;
   const showFiles = (filesSupported || filesNeedDesktopUpdate) && !state.isDemo;
+  // 旧桌面没有 web-mirror-v1 就完全不出现；离线时目录是上一轮的旧值，不当成「现在可看」。
+  const showBrowserPanels = webMirrorSupported && online;
   const activeMode: TabletSidebarMode = showFiles ? mode : 'projects';
   const currentCapability = currentWorkspace?.workspaceCapability ?? null;
 
@@ -219,7 +232,10 @@ export function TabletSidebar({
                 {expanded ? (
                   <View>
                     {workspacePanels.map((panel) => {
-                      const selected = panel.panelId === activePanelId && !settingsActive && activeFileSubPath === null;
+                      const selected = panel.panelId === activePanelId
+                        && !settingsActive
+                        && activeFileSubPath === null
+                        && activeBrowserCapability === null;
                       return (
                         <MotionPressable
                           accessibilityLabel={t('打开会话 {label}', { label: panelDisplayLabel(panel) })}
@@ -241,6 +257,29 @@ export function TabletSidebar({
                               tone={lampTone(panelStatuses[panel.panelId]!)}
                             />
                           ) : null}
+                        </MotionPressable>
+                      );
+                    })}
+                    {(showBrowserPanels ? browserPanels : []).filter(
+                      (entry) => entry.workspaceCapability === workspace.workspaceCapability,
+                    ).map((entry) => {
+                      const selected = entry.browserCapability === activeBrowserCapability;
+                      return (
+                        <MotionPressable
+                          accessibilityLabel={t('打开网页 {label}', { label: entry.title })}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected }}
+                          feedback={selected ? undefined : 'selection'}
+                          key={entry.browserCapability}
+                          onPress={() => onOpenBrowser?.(
+                            entry.browserCapability,
+                            entry.title,
+                            entry.workspaceCapability,
+                          )}
+                          style={[styles.sessionRow, selected ? styles.rowSelected : null]}
+                        >
+                          <KindIcon kind="web" size={17} theme={theme} />
+                          <Text numberOfLines={1} style={styles.sessionLabel}>{entry.title}</Text>
                         </MotionPressable>
                       );
                     })}

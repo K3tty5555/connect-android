@@ -1,3 +1,4 @@
+import type { BrowserPanelEntry } from '../domain/browserMirrorSession';
 import type { SessionWorkspaceSummary } from '../domain/session';
 import type { TabletFileTab } from './TabletTabStrip';
 
@@ -34,6 +35,50 @@ export function remapTabletFileTabs(
     if (matches.length === 1) next.push({ ...tab, workspaceCapability: matches[0]!.workspaceCapability });
   }
   return next;
+}
+
+/**
+ * iPad 主区里的网页镜像标签（ADR-003 §19）。只记桌面签发的不透明 `bcap_*` 与标题，
+ * 和会话标签一样**永远不出现 URL 或路径**。
+ */
+export interface TabletBrowserTab {
+  browserCapability: string;
+  title: string;
+  workspaceCapability: string;
+}
+
+/**
+ * 标签与桌面目录对账：在线时桌面不再列出这个面板就撤掉标签（面板已在电脑上关闭）；
+ * 还在就顺带把标题与所属项目刷成桌面的权威值（capability 轮换后仍对得上）。
+ * 离线时目录本来就是空的，不作数——保留到重连后再判，与「断线保持」同口径。
+ */
+export function resolveTabletBrowserTab(
+  tab: TabletBrowserTab | null,
+  panels: readonly BrowserPanelEntry[],
+  online: boolean,
+): TabletBrowserTab | null {
+  if (tab === null) return null;
+  if (!online) return tab;
+  const entry = panels.find((panel) => panel.browserCapability === tab.browserCapability);
+  if (entry === undefined) return null;
+  if (entry.title === tab.title && entry.workspaceCapability === tab.workspaceCapability) return tab;
+  return {
+    browserCapability: tab.browserCapability,
+    title: entry.title,
+    workspaceCapability: entry.workspaceCapability,
+  };
+}
+
+/**
+ * 网页镜像的呈现位置：iPad 宽窗口进主区标签（`pane`，与文件标签同构）；
+ * 窄窗口（分屏 / 台前调度回落到 iPhone 版式）仍是全屏 `modal`，与手机一致。
+ */
+export function browserMirrorChrome(input: {
+  tabletLayout: boolean;
+  open: boolean;
+}): 'pane' | 'modal' | 'hidden' {
+  if (!input.open) return 'hidden';
+  return input.tabletLayout ? 'pane' : 'modal';
 }
 
 /** 底部弹层在 iPad 宽窗口里居中收窄到 560pt，不铺满整屏；窄窗口照旧贴边。 */
