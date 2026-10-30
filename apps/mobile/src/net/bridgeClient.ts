@@ -88,6 +88,7 @@ import {
   MOBILE_FILE_MEDIA_MAX_BYTES,
   MOBILE_FILE_TEXT_MAX_BYTES,
 } from '../../../../src/shared/mobileFileBoundary';
+import type { BrowserPanelSource } from '../../../../src/shared/mobileBrowserSources';
 
 const MAX_COUNTER = Number.MAX_SAFE_INTEGER;
 const POLICY_CLOSE = 1008;
@@ -113,7 +114,7 @@ const MIME_RE = /^[a-z]+\/[a-z0-9.+-]+$/u;
 const CAPABILITY_TOKEN_RE = /^[a-z0-9-]{1,40}$/u;
 const KNOWN_SERVER_CAPABILITIES: readonly MobileServerCapability[] = [
   'terminal-grid-v1', 'workspace-files-v1', 'workspace-office-preview-v1', 'panel-states-v1',
-  'endpoint-sync-v1', 'surface-order-v1', 'web-mirror-v1',
+  'endpoint-sync-v1', 'surface-order-v1', 'web-mirror-v1', 'ai-browser-v1',
 ];
 const SURFACE_KINDS: readonly MobileSurfaceKind[] = ['claude', 'codex', 'shell', 'collaboration'];
 /** ADR-003 §17：两次采纳桌面新地址的最小间隔（桌面换址要连续两次 10 秒检查确认，合法变化不会更密）。 */
@@ -335,7 +336,7 @@ export type MobileCommand =
       content: string;
     }
   /** ADR-003 §19：内置网页面板镜像。只带连接级 bcap_*，无 URL、路径或 CDP 方法名。 */
-  | { kind: 'browserList'; requestId?: string }
+  | { kind: 'browserList'; requestId?: string; sources?: BrowserPanelSource[] }
   | {
       kind: 'browserView';
       requestId?: string;
@@ -2012,7 +2013,7 @@ export function parseMobileEvent(value: unknown): MobileEvent {
           && typeof panel.title === 'string'
           && panel.title.length >= 1
           && panel.title.length <= 120
-          && panel.source === 'connect-panel'
+          && (panel.source === 'connect-panel' || panel.source === 'ai-browser')
           && typeof panel.workspaceCapability === 'string'
           && WORKSPACE_CAPABILITY_RE.test(panel.workspaceCapability)
           && typeof panel.workspaceLabel === 'string'
@@ -2306,6 +2307,7 @@ export class BridgeClient {
   private surfaceOrderCapability = false;
   /** ADR-003 §19：本连接的桌面声明了 web-mirror-v1 才能发任何 browser 命令。 */
   private webMirrorCapability = false;
+  private aiBrowserCapability = false;
   private lastEndpointUpdateAtMs = 0;
   /** ADR-003 §17 回退候选：桌面换址前的那组地址。新地址认证成功一次即丢弃。 */
   private fallbackEndpoint: { host: string; port: number } | null = null;
@@ -2757,7 +2759,11 @@ export class BridgeClient {
 
   async listBrowserPanels(requestId = createMobileRequestId()): Promise<void> {
     this.assertWebMirrorSupport();
-    await this.send({ kind: 'browserList', requestId });
+    // ADR-003 §20.3：只有桌面声明了 ai-browser-v1 才在请求里带 sources——
+    // 旧桌面的契约是 additionalProperties:false，多一个字段整条命令会被拒。
+    await this.send(this.aiBrowserCapability
+      ? { kind: 'browserList', requestId, sources: ['connect-panel', 'ai-browser'] }
+      : { kind: 'browserList', requestId });
   }
 
   async startBrowserView(
@@ -2784,6 +2790,8 @@ export class BridgeClient {
     browserCapability: string,
     requestId = createMobileRequestId(),
     currentEpoch?: number,
+    /** ADR-003 §20：接管 AI 正在驱动的浏览器须先经用户确认；首次不带会收到 browser_ai_in_use。 */
+    confirmedAiUse?: boolean,
   ): Promise<void> {
     this.assertWebMirrorSupport();
     await this.send({
@@ -2791,6 +2799,7 @@ export class BridgeClient {
       requestId,
       browserCapability,
       ...(currentEpoch === undefined ? {} : { currentEpoch }),
+      ...(confirmedAiUse === true ? { confirmedAiUse: true } : {}),
     });
   }
 
@@ -3629,6 +3638,8 @@ export class BridgeClient {
       }
       // ADR-003 §19：网页镜像只在桌面声明 web-mirror-v1 时启用；旧桌面完全不受影响。
       this.webMirrorCapability = event.capabilities.includes('web-mirror-v1');
+      // §20：AI 浏览器目录；只有声明了才请求 ai-browser 来源（见 listBrowserPanels）。
+      this.aiBrowserCapability = event.capabilities.includes('ai-browser-v1');
       return;
     }
     if (event.requestId === MOBILE_CAPABILITY_PROBE_REQUEST_ID) {
@@ -3639,6 +3650,11 @@ export class BridgeClient {
   /** 桌面声明了 web-mirror-v1：才可以发 browser 命令；旧桌面会以 1008 断开未知命令。 */
   get supportsWebMirror(): boolean {
     return this.webMirrorCapability;
+  }
+
+  /** 桌面声明了 ai-browser-v1（ADR-003 §20）：手机可以在 browserList 里请求 ai-browser 来源。 */
+  get supportsAiBrowser(): boolean {
+    return this.aiBrowserCapability;
   }
 
   get supportsWorkspaceFiles(): boolean {

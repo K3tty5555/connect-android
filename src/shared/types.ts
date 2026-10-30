@@ -1,5 +1,6 @@
 // 领域类型 —— 与 contracts/*.schema.json 一一对应（契约是事实来源，类型是其 TS 投影）
 
+import type { BrowserPanelSource } from './mobileBrowserSources.js';
 import type {
   TerminalKeyModifiers,
   TerminalKeyName,
@@ -565,6 +566,47 @@ export type WebPanelTarget =
   | { kind: 'url'; url: string }
   | { kind: 'file'; subPath: string };
 
+/**
+ * 桌面端 AI 浏览器通道（ADR-003 §20，用户 2026-10-30「统一心智」）。
+ *
+ * AI 自己开的浏览器是独立进程，Connect 不持有它——桌面端不能像内置网页面板那样嵌
+ * WebContentsView，只能消费它的画面流（与手机同一套引擎、同一套输入枚举）。
+ */
+export interface DesktopAiBrowserEntry {
+  viewId: string;
+  title: string;
+  /** 哪个工具开的：仅用于呈现，不含任何本机路径或 URL。 */
+  browserName: string;
+  headless: boolean;
+}
+
+export type DesktopAiBrowserInput =
+  | { kind: 'pointer'; action: 'tap' | 'down' | 'move' | 'up'; x: number; y: number }
+  | { kind: 'wheel'; deltaX: number; deltaY: number }
+  | { kind: 'insertText'; text: string }
+  | { kind: 'key'; key: DesktopAiBrowserKey };
+
+export type DesktopAiBrowserKey =
+  | 'backspace' | 'enter' | 'tab' | 'escape'
+  | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right'
+  | 'home' | 'end' | 'page-up' | 'page-down';
+
+export type DesktopAiBrowserRequest =
+  | { schemaVersion: 1; op: 'list'; workspacePath: string }
+  | { schemaVersion: 1; op: 'watch'; viewId: string }
+  | { schemaVersion: 1; op: 'ack'; viewId: string; seq: number }
+  | { schemaVersion: 1; op: 'input'; viewId: string; input: DesktopAiBrowserInput }
+  | { schemaVersion: 1; op: 'stop'; viewId: string };
+
+/** main → renderer 的一帧（JPEG base64，与手机侧同样不落盘）。 */
+export interface DesktopAiBrowserFrame {
+  viewId: string;
+  seq: number;
+  jpegBase64: string;
+  width: number;
+  height: number;
+}
+
 export interface WebPanelBounds {
   x: number;
   y: number;
@@ -897,7 +939,14 @@ export type MobileServerCapability =
   | 'panel-states-v1'
   | 'endpoint-sync-v1'
   | 'surface-order-v1'
-  | 'web-mirror-v1';
+  | 'web-mirror-v1'
+  /**
+   * ADR-003 §20：桌面可附着 AI 自己开的浏览器。
+   * ⚠️ 这是第 8 个能力，而已发布手机（1.0.16 及更早）对能力表的长度上限正是 8
+   * （超出即整份 workspaceList 被丢弃，用户连项目都看不见）。**名额已满**：
+   * 再加新能力前必须先解决旧手机的上限，见 tests/mobileBrowserSources.test.ts 的守卫。
+   */
+  | 'ai-browser-v1';
 /** ADR-003 §17：桌面已绑定成功的直连监听；未监听（含 Relay-only）为 null。 */
 export interface MobileBridgeEndpoint {
   host: string;
@@ -1104,7 +1153,7 @@ export type MobileCommand =
       content: string;
     }
   /** ADR-003 §19：内置网页面板手机镜像。命令只带连接级 bcap_*，无任何 URL / CDP 方法名。 */
-  | { kind: 'browserList'; requestId?: string }
+  | { kind: 'browserList'; requestId?: string; sources?: BrowserPanelSource[] }
   | {
       kind: 'browserView';
       requestId?: string;
@@ -1118,6 +1167,8 @@ export type MobileCommand =
       requestId: string;
       browserCapability: string;
       currentEpoch?: number;
+      /** ADR-003 §20：接管 AI 正在驱动的浏览器必须先经用户确认（首次不带会得到 browser_ai_in_use）。 */
+      confirmedAiUse?: boolean;
     }
   | {
       kind: 'browserInput';
@@ -1452,7 +1503,7 @@ export interface MobileRoomSummary {
 export interface MobileBrowserPanelSummary {
   browserCapability: string;
   title: string;
-  source: 'connect-panel';
+  source: BrowserPanelSource;
   workspaceCapability: string;
   workspaceLabel: string;
 }

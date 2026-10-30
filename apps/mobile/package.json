@@ -1,6 +1,6 @@
 {
   "name": "@connect/mobile",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "main": "index.ts",
   "dependencies": {
     "@gorhom/bottom-sheet": "5.2.13",

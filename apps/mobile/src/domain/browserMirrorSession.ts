@@ -18,6 +18,8 @@ export interface BrowserPanelEntry {
   title: string;
   workspaceCapability: string;
   workspaceLabel: string;
+  /** ADR-003 §20：`ai-browser` = AI 自己开的浏览器；缺省视为内置面板（与旧数据兼容）。 */
+  source?: 'connect-panel' | 'ai-browser';
 }
 
 /** 一帧已解密画面（JPEG → base64，RN Image 以 data URI 消费）。 */
@@ -345,6 +347,9 @@ export function browserMirrorErrorPresentation(
       return { kind: 'message', tone: 'warn', text: '网页面板已变化，请刷新' };
     case 'browser_panel_closed':
       return { kind: 'message', tone: 'warn', text: '网页已在电脑上关闭' };
+    // §20：AI 正在用这个页面——不是失败，是把决定权交回用户（App 层据此弹确认后重发）。
+    case 'browser_ai_in_use':
+      return { kind: 'message', tone: 'warn', text: 'AI 正在使用这个页面，确认要接管吗' };
     case 'browser_mirror_unavailable':
       return { kind: 'message', tone: 'warn', text: '电脑端暂不支持网页镜像' };
     case 'workspace_authorization_expired':

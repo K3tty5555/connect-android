@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
+  Alert,
   AppState,
   Modal,
   Settings as NativeSettings,
@@ -3694,14 +3695,38 @@ export default function App(): React.ReactElement {
     saveBrowserLastFrame();
   }, [saveBrowserLastFrame]);
 
+  /**
+   * ADR-003 §20.3：接管 AI 正在驱动的浏览器前先问一次。确认后带
+   * confirmedAiUse 发送（桌面对 AI 来源首次不带该字段会以 browser_ai_in_use 拒绝，
+   * 作为服务端的第二道闸门）。
+   */
   const takeoverBrowserMirror = useCallback((browserCapability: string, currentEpoch: number | undefined): void => {
+    const state = browserMirrorRef.current;
     const client = bridge.current;
     if (client === null || !client.supportsWebMirror) return;
-    void client.takeoverBrowser(
-      browserCapability,
-      createMobileRequestId(),
-      currentEpoch,
-    ).catch(() => undefined);
+    const entry = state.panels.find((panel) => panel.browserCapability === browserCapability);
+    const isAiBrowser = entry?.source === 'ai-browser';
+    const send = (confirmed: boolean): void => {
+      void client.takeoverBrowser(
+        browserCapability,
+        createMobileRequestId(),
+        currentEpoch,
+        confirmed || undefined,
+      ).catch(() => undefined);
+    };
+    if (!isAiBrowser) {
+      send(false);
+      return;
+    }
+    Alert.alert(
+      t('AI 正在使用这个页面'),
+      t('接管后你们的操作会互相干扰。确定接管吗？'),
+      [
+        { text: t('取消'), style: 'cancel' },
+        { text: t('接管'), style: 'default', onPress: () => send(true) },
+      ],
+      { cancelable: true },
+    );
   }, []);
 
   const browserInputBase = (): {
