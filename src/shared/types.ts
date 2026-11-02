@@ -1768,6 +1768,61 @@ export interface DesktopUpdatePreferences {
   skippedVersion: string | null;
 }
 
+/** 崩溃记录（contracts/crash-report.schema.json，ADR-008）：本机 crash.log 的一行。 */
+export type CrashLogEntryKind =
+  | 'render-process-gone'
+  | 'child-process-gone'
+  | 'uncaught-exception'
+  | 'js-fatal'
+  | 'previous-exit'
+  | 'native-crash';
+
+export interface CrashLogEntry {
+  at: string;
+  kind: CrashLogEntryKind;
+  surface?: string;
+  reason?: string;
+  exitCode?: number;
+  processType?: string;
+  serviceName?: string;
+  name?: string;
+  origin?: string;
+  errorName?: string;
+  code?: string;
+  message?: string;
+  frames?: string[];
+  appVersion?: string;
+  platform?: string;
+  arch?: string;
+  electron?: string;
+  osRelease?: string;
+}
+
+export type CrashReportPlatform = 'darwin' | 'win32' | 'linux' | 'ios' | 'android';
+
+/** 用户点「发送给作者」时上传的报告；reportId 每次随机生成，不关联设备或账号。 */
+export interface CrashReport {
+  schemaVersion: 1;
+  reportId: string;
+  platform: CrashReportPlatform;
+  appVersion: string;
+  entries: CrashLogEntry[];
+}
+
+/** 设置页诊断记录预览（contracts/crash-report-preview.schema.json）。 */
+export interface CrashReportPreview {
+  entryCount: number;
+  reportId: string | null;
+  text: string | null;
+  canSend: boolean;
+  /** 最新一条记录已成功发送过：不可再发，直到出现新记录（ADR-008 修订 2026-11-01）。 */
+  alreadySent: boolean;
+}
+
+export type CrashReportSendResult =
+  | { ok: true; reportId: string }
+  | { ok: false; code: 'network' | 'rate_limited' | 'rejected' | 'server' };
+
 /** 工作区顶部新建按钮配置（contracts/toolbar-buttons.schema.json，DESKTOP-TOOLBAR-BUTTONS-1025）。 */
 /** kimi：预置的 Kimi Code，默认隐藏（用户 2026-10-25 拍板）。web：内置网页面板按钮，默认显示（用户 2026-10-26 拍板）。 */
 export const TOOLBAR_BUILTIN_IDS = ['claude', 'codex', 'shell', 'collab', 'kimi', 'web'] as const;

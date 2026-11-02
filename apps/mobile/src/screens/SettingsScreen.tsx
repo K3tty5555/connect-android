@@ -17,6 +17,7 @@ import {
   ChevronUp,
   Download,
   ExternalLink,
+  FileText,
   Info,
   Keyboard as KeyboardIcon,
   Languages,
@@ -29,6 +30,7 @@ import {
 } from 'lucide-react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type {
+  CrashReport,
   MobilePreferences,
   LanguagePreference,
   MobileThemePreference,
@@ -49,6 +51,8 @@ import { MotionPressable } from '../components/MotionPressable';
 import { SettingsSelect } from '../components/SettingsSelect';
 import { t } from '../i18n';
 import { useAndroidBack } from '../platform/useAndroidBack';
+import type { CrashDiagnostics } from '../crash/crashDiagnostics';
+import { CrashReportPreview } from './CrashReportPreview';
 
 const CONNECTION_LABELS: Record<ConnectionState, string> = {
   unpaired: '尚未绑定',
@@ -152,6 +156,7 @@ export function SettingsScreen({
   onBack,
   relay,
   onRelayChange,
+  crashDiagnostics,
 }: {
   state: SessionViewModel;
   presentedConnection?: ConnectionState;
@@ -174,6 +179,8 @@ export function SettingsScreen({
   onBack?(): void;
   relay?: { url: string; apiKey: string } | null;
   onRelayChange?(config: { url: string; apiKey: string } | null): Promise<void>;
+  /** ADR-008: the row exists only while the local crash log has entries. */
+  crashDiagnostics?: CrashDiagnostics;
 }): React.ReactElement {
   const styles = createStyles(theme);
   const insets = useSafeAreaInsets();
@@ -198,6 +205,8 @@ export function SettingsScreen({
   const [relayUrl, setRelayUrl] = useState(relay?.url ?? '');
   const [relayApiKey, setRelayApiKey] = useState(relay?.apiKey ?? '');
   const [relaySaved, setRelaySaved] = useState(false);
+  const [crashEntryCount] = useState(() => crashDiagnostics?.entries().length ?? 0);
+  const [crashReport, setCrashReport] = useState<CrashReport | null>(null);
 
   const openPublicLink = async (kind: PublicLinkKind): Promise<void> => {
     if (
@@ -565,6 +574,25 @@ export function SettingsScreen({
               </View>
             </MotionPressable>
           ) : null}
+          {crashDiagnostics && crashEntryCount > 0 ? (
+            <MotionPressable
+              accessibilityLabel={t('诊断记录')}
+              accessibilityRole="button"
+              accessibilityValue={{ text: String(crashEntryCount) }}
+              onPress={() => setCrashReport(crashDiagnostics.createReport())}
+              style={styles.publicLinkRow}
+              testID="crash-diagnostics"
+            >
+              <View style={styles.publicLinkLabel}>
+                <FileText color={theme.colors.text2} size={18} />
+                <Text style={styles.rowLabel}>{t('诊断记录')}</Text>
+              </View>
+              <View style={styles.publicLinkValue}>
+                <Text style={styles.rowValueSecondary}>{crashEntryCount}</Text>
+                <ChevronRight color={theme.colors.text3} size={18} />
+              </View>
+            </MotionPressable>
+          ) : null}
           {publicLinkError ? (
             <Text accessibilityRole="alert" style={styles.inlineError}>{publicLinkError}</Text>
           ) : null}
@@ -589,6 +617,14 @@ export function SettingsScreen({
           ) : null}
         </View>
       </ScrollView>
+      {crashReport && crashDiagnostics ? (
+        <CrashReportPreview
+          diagnostics={crashDiagnostics}
+          onClose={() => setCrashReport(null)}
+          report={crashReport}
+          theme={theme}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }

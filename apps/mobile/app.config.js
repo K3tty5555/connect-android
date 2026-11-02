@@ -12,6 +12,8 @@ const version = process.env.CONNECT_APP_STORE_VERSION;
 const buildNumber = process.env.CONNECT_APP_STORE_IOS_BUILD_NUMBER;
 const appJson = require('./app.json').expo;
 const publicLinkDefaults = require('../../config/public-links.json');
+// ADR-008：设置「诊断记录」里「发送给作者」的上传地址；主机须在白名单里，否则手机端隐藏发送、只留分享。
+const crashReportDefaults = require('../../config/crash-report.json');
 const publicLinks = {
   hosts: process.env.CONNECT_PUBLIC_LINK_HOSTS || publicLinkDefaults.allowedHosts.join(','),
   macDownload: process.env.CONNECT_PUBLIC_MAC_DOWNLOAD_URL,
@@ -32,6 +34,8 @@ process.env.EXPO_PUBLIC_CONNECT_PRIVACY_URL = publicLinks.privacy || '';
 process.env.EXPO_PUBLIC_CONNECT_SUPPORT_URL = publicLinks.support || '';
 process.env.EXPO_PUBLIC_CONNECT_COMPATIBILITY_URL = publicLinks.compatibility || '';
 process.env.EXPO_PUBLIC_CONNECT_DOWNLOADS_URL = publicLinks.downloads || '';
+process.env.EXPO_PUBLIC_CONNECT_CRASH_REPORT_URL = process.env.CONNECT_CRASH_REPORT_URL || crashReportDefaults.url || '';
+process.env.EXPO_PUBLIC_CONNECT_CRASH_REPORT_HOSTS = process.env.CONNECT_CRASH_REPORT_HOSTS || (crashReportDefaults.hosts || []).join(',');
 
 if (storeBuild) {
   const missing = [

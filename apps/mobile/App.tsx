@@ -125,6 +125,7 @@ import {
   type MobilePerformanceOperation,
 } from './src/performance/mobilePerformanceTrace';
 import { createExpoMobilePerformanceStore } from './src/performance/expoMobilePerformanceStore';
+import { createMobileCrashDiagnostics } from './src/crash/expoCrashLog';
 import type { TerminalStreamHandle } from './src/terminal/terminalStreamHandle';
 import { shouldMarkPanelRead } from './src/domain/panelRead';
 import {
@@ -550,6 +551,9 @@ export default function App(): React.ReactElement {
   const performanceTraceRef = useRef<MobilePerformanceTrace | null>(null);
   const performanceStoreRef = useRef<ReturnType<typeof createExpoMobilePerformanceStore> | null>(null);
   performanceStoreRef.current ??= createExpoMobilePerformanceStore();
+  // ADR-008: created once; the Settings row reads the local crash log when it mounts.
+  const crashDiagnosticsRef = useRef<ReturnType<typeof createMobileCrashDiagnostics> | null>(null);
+  crashDiagnosticsRef.current ??= createMobileCrashDiagnostics();
   performanceTraceRef.current ??= new MobilePerformanceTrace(
     512,
     () => performance.now(),
@@ -4394,6 +4398,7 @@ export default function App(): React.ReactElement {
               onRelayChange={updateRelayProfile}
               publicAppInfo={MOBILE_PUBLIC_APP_INFO}
               onOpenPublicLink={openMobilePublicLink}
+              crashDiagnostics={crashDiagnosticsRef.current ?? undefined}
               onBack={() => navigate({ type: 'back' })}
             />
           )}

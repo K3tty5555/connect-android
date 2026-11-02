@@ -65,6 +65,49 @@ export const protectFileComplete: ((path: string) => boolean) | null = (() => {
     : null;
 })();
 
+/** One row of Android's ApplicationExitInfo (API 30+), already filtered to crash-like reasons natively. */
+export interface NativeExitReason {
+  /** Milliseconds since the epoch. */
+  timestamp: number;
+  /** crash | crash-native | anr | low-memory | initialization-failure | signaled */
+  reason: string;
+  status: number;
+  /** System text, at most 500 characters; trace streams are never read. */
+  description?: string | null;
+  /** RunningAppProcessInfo importance when the process died (100 foreground, 200 visible, larger is background). */
+  importance?: number;
+}
+
+/** One MetricKit MXCrashDiagnostic as stored by the iOS module (ADR-008). */
+export interface NativeCrashDiagnostic {
+  timestampMs: number;
+  exceptionType?: number;
+  exceptionCode?: number;
+  signal?: number;
+  terminationReason?: string;
+  /** Objective-C exception name (iOS 17+), never its message. */
+  exceptionName?: string;
+  osVersion?: string;
+  /** Crashed thread, innermost first, as `binary+0xoffset`. */
+  frames?: string[];
+}
+
+/** Android only; null on iOS, in older binaries and in tests. */
+export const recentExitReasons: (() => NativeExitReason[]) | null = (() => {
+  const module = requireOptionalNativeModule<{ recentExitReasons?(): NativeExitReason[] }>('ConnectTerminal');
+  return typeof module?.recentExitReasons === 'function'
+    ? () => module.recentExitReasons!()
+    : null;
+})();
+
+/** iOS only: returns and forgets the crash diagnostics MetricKit delivered. Null elsewhere. */
+export const drainCrashDiagnostics: (() => NativeCrashDiagnostic[]) | null = (() => {
+  const module = requireOptionalNativeModule<{ drainCrashDiagnostics?(): NativeCrashDiagnostic[] }>('ConnectTerminal');
+  return typeof module?.drainCrashDiagnostics === 'function'
+    ? () => module.drainCrashDiagnostics!()
+    : null;
+})();
+
 /**
  * The native terminal view — SwiftTerm on iOS, the Termux-backed view on
  * Android (2026-10-15). Null where this binary does not carry it (an older

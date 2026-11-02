@@ -2,7 +2,7 @@
   "expo": {
     "name": "Connect",
     "slug": "connect-mobile",
-    "version": "1.0.18",
+    "version": "1.0.19",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "icon": "./assets/icon.png",
@@ -19,7 +19,16 @@
       "privacyManifests": {
         "NSPrivacyTracking": false,
         "NSPrivacyTrackingDomains": [],
-        "NSPrivacyCollectedDataTypes": [],
+        "NSPrivacyCollectedDataTypes": [
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeCrashData",
+            "NSPrivacyCollectedDataTypeLinked": false,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          }
+        ],
         "NSPrivacyAccessedAPITypes": []
       },
       "infoPlist": {
@@ -44,7 +53,7 @@
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#16181d"
       },
-      "versionCode": 14,
+      "versionCode": 15,
       "allowBackup": false
     },
     "plugins": [
