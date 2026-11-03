@@ -70,6 +70,7 @@ import type {
 import {
   MOBILE_CAPABILITY_PROBE_REQUEST_ID,
   MOBILE_CAPABILITY_PROBE_V2_REQUEST_ID,
+  MOBILE_CAPABILITY_PROBE_V3_REQUEST_ID,
 } from '../../../../src/shared/types';
 import type {
   MobileBrowserPanelSummary,
@@ -114,9 +115,10 @@ const MIME_RE = /^[a-z]+\/[a-z0-9.+-]+$/u;
 const CAPABILITY_TOKEN_RE = /^[a-z0-9-]{1,40}$/u;
 const KNOWN_SERVER_CAPABILITIES: readonly MobileServerCapability[] = [
   'terminal-grid-v1', 'workspace-files-v1', 'workspace-office-preview-v1', 'panel-states-v1',
-  'endpoint-sync-v1', 'surface-order-v1', 'web-mirror-v1', 'ai-browser-v1',
+  'endpoint-sync-v1', 'surface-order-v1', 'web-mirror-v1', 'ai-browser-v1', 'surface-kimi-v1', 'panel-rename-v1',
 ];
-const SURFACE_KINDS: readonly MobileSurfaceKind[] = ['claude', 'codex', 'shell', 'collaboration'];
+/** kimi 只在本机经 v3 探针声明后才会收到（用户 2026-11-02）。 */
+const SURFACE_KINDS: readonly MobileSurfaceKind[] = ['claude', 'codex', 'shell', 'collaboration', 'kimi'];
 /** ADR-003 §17：两次采纳桌面新地址的最小间隔（桌面换址要连续两次 10 秒检查确认，合法变化不会更密）。 */
 const ENDPOINT_UPDATE_MIN_INTERVAL_MS = 5_000;
 const PANEL_STATUSES: readonly MobilePanelState['status'][] = ['needs_input', 'error', 'unread', 'running', 'idle'];
@@ -219,7 +221,7 @@ export type MobileCommand =
   | { kind: 'watchPanelStates'; requestId: string }
   | { kind: 'markPanelRead'; requestId: string; panelId: string }
   | { kind: 'endpointSync'; requestId: string }
-  | { kind: 'watchSurfaceOrder'; requestId: string }
+  | { kind: 'watchSurfaceOrder'; requestId: string; surfaceKinds?: Array<'kimi'> }
   | { kind: 'getCollaborationProfile'; requestId: string; workspaceCapability: string }
   | {
       kind: 'setCollaborationAvatar';
@@ -297,6 +299,8 @@ export type MobileCommand =
       surfaceKind: MobileSurfaceKind;
     }
   | { kind: 'closeSurface'; requestId: string; panelId: string; epoch: number }
+  /** 只在电脑声明 panel-rename-v1 后发；null 恢复自动名称（用户 2026-11-02）。 */
+  | { kind: 'renamePanel'; requestId: string; panelId: string; title: string | null }
   | {
       kind: 'attach';
       requestId?: string;
@@ -485,6 +489,7 @@ export type MobileEvent =
       surfaceKind: MobileSurfaceKind;
     }
   | { kind: 'surfaceCloseAccepted'; requestId: string; panelId: string }
+  | { kind: 'panelRenameAccepted'; requestId: string; panelId: string }
   | TerminalGridFrame
   | {
       kind: 'ptyReplay';
@@ -612,7 +617,7 @@ export type MobileEvent =
 
 export interface MobilePanelSummary {
   panelId: string;
-  kind: 'claude' | 'codex' | 'shell';
+  kind: 'claude' | 'codex' | 'shell' | 'kimi';
   label: string;
   workspaceCapability: string;
   workspaceLabel: string;
@@ -638,7 +643,7 @@ export interface MobileRoomMessage {
 
 export type MobileRoomImageMime = 'image/png' | 'image/jpeg';
 
-export type MobileSurfaceKind = 'claude' | 'codex' | 'shell' | 'collaboration';
+export type MobileSurfaceKind = 'claude' | 'codex' | 'shell' | 'collaboration' | 'kimi';
 
 export interface MobileWorkspaceSummary {
   workspaceCapability: string;
@@ -1314,7 +1319,8 @@ export function parseMobileEvent(value: unknown): MobileEvent {
           || (typeof value.requestId === 'string' && REQUEST_ID_RE.test(value.requestId)))
         && (value.capabilities === undefined || (
           Array.isArray(value.capabilities)
-          && value.capabilities.length <= 8
+          // v3 探针的回复可超过 8 项（v2 回复仍封顶 8，保住已发布手机）。
+          && value.capabilities.length <= 16
           && new Set(value.capabilities).size === value.capabilities.length
           && value.capabilities.every((capability) => (
             typeof capability === 'string' && CAPABILITY_TOKEN_RE.test(capability)
@@ -1355,7 +1361,7 @@ export function parseMobileEvent(value: unknown): MobileEvent {
           && exactKeys(panel, ['panelId', 'kind', 'label', 'workspaceCapability', 'workspaceLabel'])
           && typeof panel.panelId === 'string'
           && PANEL_ID_RE.test(panel.panelId)
-          && (panel.kind === 'claude' || panel.kind === 'codex' || panel.kind === 'shell')
+          && (panel.kind === 'claude' || panel.kind === 'codex' || panel.kind === 'shell' || panel.kind === 'kimi')
           && typeof panel.label === 'string'
           && panel.label.length >= 1
           && panel.label.length <= 160
@@ -1648,10 +1654,12 @@ export function parseMobileEvent(value: unknown): MobileEvent {
           || value.surfaceKind === 'codex'
           || value.surfaceKind === 'shell'
           || value.surfaceKind === 'collaboration'
+          || value.surfaceKind === 'kimi'
         )
       ) return value as unknown as MobileEvent;
       break;
     case 'surfaceCloseAccepted':
+    case 'panelRenameAccepted':
       if (
         exactKeys(value, ['kind', 'requestId', 'panelId'])
         && typeof value.requestId === 'string'
@@ -2205,6 +2213,8 @@ export interface BridgeClientCallbacks {
    * null = 本连接的电脑不提供（旧版或未声明），按完整四项显示。
    */
   onSurfaceOrder?(surfaces: MobileSurfaceKind[] | null): void;
+  /** 本连接的电脑是否支持手机改名（v3 回复声明 panel-rename-v1，用户 2026-11-02）；重连时先回 false。 */
+  onPanelRenameSupport?(supported: boolean): void;
   /** ADR-003 §17：桌面告知新地址，手机采纳后回调 App 以持久化。 */
   onEndpointChanged?(binding: { deviceId: string; desktopIdentityPubKey: string }, endpoint: { host: string; port: number }): void;
   /** ADR-003 §17：新地址经 L3 认证成功一次，App 可丢弃持久化的回退候选。 */
@@ -2305,6 +2315,8 @@ export class BridgeClient {
   private panelStatesCapability = false;
   private endpointSyncCapability = false;
   private surfaceOrderCapability = false;
+  /** v3 回复里声明了 panel-rename-v1（用户 2026-11-02）。 */
+  private panelRenameCapability = false;
   /** ADR-003 §19：本连接的桌面声明了 web-mirror-v1 才能发任何 browser 命令。 */
   private webMirrorCapability = false;
   private aiBrowserCapability = false;
@@ -3635,6 +3647,8 @@ export class BridgeClient {
       // 同样按连接订阅；未声明的旧电脑收到未知命令会以 1008 断开，所以只在声明后发。
       if (this.surfaceOrderCapability) {
         void this.send({ kind: 'watchSurfaceOrder', requestId: createMobileRequestId() }).catch(() => undefined);
+        // v2 能力表已到旧手机的长度上限，Kimi 等新能力只在 v3 回复里；旧电脑把 v3 当普通请求、回复不带能力。
+        void this.send({ kind: 'listWorkspaces', requestId: MOBILE_CAPABILITY_PROBE_V3_REQUEST_ID }).catch(() => undefined);
       }
       // ADR-003 §19：网页镜像只在桌面声明 web-mirror-v1 时启用；旧桌面完全不受影响。
       this.webMirrorCapability = event.capabilities.includes('web-mirror-v1');
@@ -3642,9 +3656,24 @@ export class BridgeClient {
       this.aiBrowserCapability = event.capabilities.includes('ai-browser-v1');
       return;
     }
+    if (event.requestId === MOBILE_CAPABILITY_PROBE_V3_REQUEST_ID) {
+      this.panelRenameCapability = event.capabilities?.includes('panel-rename-v1') === true;
+      this.callbacks.onPanelRenameSupport?.(this.panelRenameCapability);
+      // 声明后桌面才会在新建列表与面板列表里给 kimi；没声明过的电脑收到未知字段会 1008 断开，所以只在确认后发。
+      if (this.surfaceOrderCapability && event.capabilities?.includes('surface-kimi-v1') === true) {
+        void this.send({ kind: 'watchSurfaceOrder', requestId: createMobileRequestId(), surfaceKinds: ['kimi'] })
+          .catch(() => undefined);
+      }
+      return;
+    }
     if (event.requestId === MOBILE_CAPABILITY_PROBE_REQUEST_ID) {
       this.finishCapabilityProbe(event.capabilities?.includes('terminal-grid-v1') === true, false, true);
     }
+  }
+
+  /** 桌面在 v3 回复里声明了 panel-rename-v1：才可以发 renamePanel；旧桌面会以 1008 断开未知命令。 */
+  get supportsPanelRename(): boolean {
+    return this.panelRenameCapability;
   }
 
   /** 桌面声明了 web-mirror-v1：才可以发 browser 命令；旧桌面会以 1008 断开未知命令。 */
@@ -3708,6 +3737,8 @@ export class BridgeClient {
     this.panelStatesCapability = false;
     this.endpointSyncCapability = false;
     this.surfaceOrderCapability = false;
+    if (this.panelRenameCapability) this.callbacks.onPanelRenameSupport?.(false);
+    this.panelRenameCapability = false;
     this.webMirrorCapability = false;
     if (probe === null) return;
     this.cancelSchedule(probe.timer);

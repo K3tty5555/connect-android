@@ -15,7 +15,7 @@ export type OwnershipAuthority = Extract<
   OwnershipState,
   'desktop_owned' | 'mobile_owned' | 'other_mobile_owned'
 > | null;
-export type AgentKind = 'claude' | 'codex' | 'shell';
+export type AgentKind = 'claude' | 'codex' | 'shell' | 'kimi';
 export type SurfaceKind = AgentKind | 'collaboration';
 export type TaskPhase =
   | 'idle'

@@ -34,7 +34,7 @@ export function LastScreenView({
   const content = screen.screen;
   const agent = screen.surfaceKind === 'claude' || screen.surfaceKind === 'codex' || screen.surfaceKind === 'shell'
     ? screen.surfaceKind
-    : undefined;
+    : screen.surfaceKind === 'kimi' ? 'shell' : undefined;
 
   useEffect(() => {
     if (content.kind !== 'bytes') return;

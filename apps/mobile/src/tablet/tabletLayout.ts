@@ -85,3 +85,39 @@ export function browserMirrorChrome(input: {
 export function sheetHorizontalInset(width: number): number {
   return isTabletLayout(width) ? Math.max(0, Math.round((width - 560) / 2)) : 0;
 }
+
+/**
+ * iPad 标签条该滚到哪（2026-11-02，商店截图第 6 张最左标签被切掉半个）。
+ * 激活标签已在可视区内就不动；要滚就只滚最少的距离，并把左边缘对齐到某个标签的起点，
+ * 不留下被切掉一半的标签。`tabs` 为各标签在内容里的 [start, end]（按顺序）。
+ */
+export function tabStripScrollTarget(
+  tabs: ReadonlyArray<{ start: number; end: number }>,
+  active: { start: number; end: number },
+  viewport: number,
+  current: number,
+): number {
+  if (viewport <= 0) return current;
+  const breathing = 4;
+  if (active.start >= current && active.end <= current + viewport) return current;
+  if (active.start < current) {
+    return tabs[0] !== undefined && active.start <= tabs[0].start ? 0 : Math.max(0, active.start - breathing);
+  }
+  const needed = active.end - viewport + breathing;
+  const snap = tabs.find((tab) => tab.start - breathing >= needed && tab.start <= active.start);
+  return Math.max(0, (snap ?? active).start - breathing);
+}
+
+/**
+ * 标签条末尾要补多少空白，`target` 才滚得到（2026-11-02）：溢出不足一个标签宽时，
+ * 不补的话 ScrollView 会把滚动夹回可滚上限，最左又剩半个标签。`endPadding` 为内容容器的右内边距。
+ */
+export function tabStripTrailingPad(
+  tabs: ReadonlyArray<{ start: number; end: number }>,
+  target: number,
+  viewport: number,
+  endPadding: number,
+): number {
+  const contentEnd = tabs.reduce((edge, tab) => Math.max(edge, tab.end), 0) + endPadding;
+  return Math.max(0, Math.ceil(target + viewport - contentEnd));
+}

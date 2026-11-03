@@ -14,6 +14,7 @@ export const MOBILE_PUBLIC_APP_INFO = buildPublicAppInfo(
     supportUrl: process.env.EXPO_PUBLIC_CONNECT_SUPPORT_URL,
     compatibilityUrl: process.env.EXPO_PUBLIC_CONNECT_COMPATIBILITY_URL,
     downloadsUrl: process.env.EXPO_PUBLIC_CONNECT_DOWNLOADS_URL,
+    relayUrl: process.env.EXPO_PUBLIC_CONNECT_RELAY_URL,
   },
 );
 

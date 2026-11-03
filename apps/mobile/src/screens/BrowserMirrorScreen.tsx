@@ -18,7 +18,8 @@ import {
   View,
 } from 'react-native';
 import { ChevronLeft, ChevronRight, RotateCw, Undo2 } from 'lucide-react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useKeyboardState } from 'react-native-keyboard-controller';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   BROWSER_KEY_WHITELIST,
   type MobileBrowserKeyName,
@@ -190,6 +191,13 @@ export function BrowserMirrorScreen({
   const safeAreaEdges = chrome === 'pane'
     ? (['right', 'bottom'] as const)
     : (['top', 'left', 'right'] as const);
+  const insets = useSafeAreaInsets();
+  const keyboardVisible = useKeyboardState((keyboard) => keyboard.isVisible);
+  // 手机版不让底部安全区（画面要贴到底），由最底下那一栏自己垫上，否则会伸进屏幕圆角与 Home 横条
+  // （2026-11-02 回归）；键盘弹出时收回，与终端页 composer 同口径。平板主区由外层安全区负责。
+  const bottomInset = chrome === 'pane'
+    ? 0
+    : keyboardVisible ? SPACE.x1 : Math.max(insets.bottom, SPACE.x2);
   const [container, setContainer] = useState({ width: 0, height: 0 });
   const [actionBarWidth, setActionBarWidth] = useState(0);
   const actionBarWide = actionBarWidth >= WIDE_ACTION_BAR_MIN_WIDTH;
@@ -587,7 +595,7 @@ export function BrowserMirrorScreen({
       </View>
       <View
         onLayout={(event) => setActionBarWidth(event.nativeEvent.layout.width)}
-        style={styles.actionBar}
+        style={[styles.actionBar, controlled ? null : { paddingBottom: bottomInset }]}
         testID="browser-action-bar"
       >
         <MotionPressable
@@ -632,7 +640,7 @@ export function BrowserMirrorScreen({
         ) : null}
       </View>
       {controlled ? (
-        <View style={styles.inputArea}>
+        <View style={[styles.inputArea, { paddingBottom: bottomInset }]} testID="browser-input-area">
           <TextInput
             accessibilityLabel={t('输入文字')}
             maxFontSizeMultiplier={MAX_COMPACT_FONT_SCALE}

@@ -293,7 +293,7 @@ export class PairingClient {
           'connection_failed',
           this.qr?.relay
             ? '连接私人 Relay 超时，请检查 Relay 地址、API Key 和服务器状态。'
-            : '连接电脑超时，请确认 iPhone 和 Mac 已连接 Tailscale 或同一局域网。',
+            : '连接电脑超时，请确认手机和电脑已连接 Tailscale 或同一局域网。',
         ));
         socket.close(1000, 'pairing connection timeout');
       }, CONNECTION_TIMEOUT_MS);
@@ -460,7 +460,7 @@ export class PairingClient {
     const message = code === 'unauthorized'
       ? 'Relay API Key 无效或已过期，请检查手机上的 Relay 设置。'
       : code === 'expired'
-        ? 'Relay 配对二维码已过期，请在 Mac 上重新生成。'
+        ? 'Relay 配对二维码已过期，请在电脑上重新生成。'
         : code === 'rate_limited'
           ? 'Relay 当前连接数已满，请稍后重试。'
           : 'Relay 暂时拒绝了连接，请检查服务器状态。';

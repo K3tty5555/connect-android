@@ -23,6 +23,7 @@ const publicLinks = {
   support: process.env.CONNECT_PUBLIC_SUPPORT_URL || publicLinkDefaults.supportUrl,
   compatibility: process.env.CONNECT_PUBLIC_COMPATIBILITY_URL || publicLinkDefaults.compatibilityUrl,
   downloads: process.env.CONNECT_PUBLIC_DOWNLOADS_URL || publicLinkDefaults.downloadsUrl,
+  relay: process.env.CONNECT_PUBLIC_RELAY_URL || publicLinkDefaults.relayUrl,
 };
 
 process.env.EXPO_PUBLIC_CONNECT_VERSION = version || appJson.version;
@@ -34,6 +35,7 @@ process.env.EXPO_PUBLIC_CONNECT_PRIVACY_URL = publicLinks.privacy || '';
 process.env.EXPO_PUBLIC_CONNECT_SUPPORT_URL = publicLinks.support || '';
 process.env.EXPO_PUBLIC_CONNECT_COMPATIBILITY_URL = publicLinks.compatibility || '';
 process.env.EXPO_PUBLIC_CONNECT_DOWNLOADS_URL = publicLinks.downloads || '';
+process.env.EXPO_PUBLIC_CONNECT_RELAY_URL = publicLinks.relay || '';
 process.env.EXPO_PUBLIC_CONNECT_CRASH_REPORT_URL = process.env.CONNECT_CRASH_REPORT_URL || crashReportDefaults.url || '';
 process.env.EXPO_PUBLIC_CONNECT_CRASH_REPORT_HOSTS = process.env.CONNECT_CRASH_REPORT_HOSTS || (crashReportDefaults.hosts || []).join(',');
 

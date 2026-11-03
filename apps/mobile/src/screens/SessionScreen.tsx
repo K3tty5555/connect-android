@@ -131,6 +131,8 @@ export interface SessionScreenProps {
   refreshStatus?: RefreshStatus;
   terminalSwapStatus?: OperationPhase;
   onSurfaceClose?(panelId: string, epoch: number): boolean | void;
+  /** 给窗口改名（用户 2026-11-02）；不传 = 这台手机 / 这台电脑不能改，入口不出现。 */
+  onPanelRename?(panelId: string, title: string): Promise<void>;
   roomMessages?: readonly MobileRoomMessage[];
   roomOmittedMessages?: number;
   collaborationAvatar?: string | null;
@@ -200,6 +202,7 @@ export function SessionScreen({
   refreshStatus = 'idle',
   terminalSwapStatus = 'idle',
   onSurfaceClose,
+  onPanelRename,
   roomMessages = [],
   roomOmittedMessages = 0,
   collaborationAvatar = null,
@@ -453,6 +456,9 @@ export function SessionScreen({
           closingPanelIndex={closingSurface?.index ?? -1}
           onCloseExitComplete={() => setClosingSurface(null)}
           onCloseActiveSurface={confirmCloseActiveSurface}
+          onRenameActiveSurface={onPanelRename !== undefined && state.activePanelId !== null && !isCollaboration
+            ? (title) => onPanelRename(state.activePanelId!, title)
+            : undefined}
           onBack={onBackToProject}
           panels={switcherPanels}
           workspaces={switcherWorkspaces}
@@ -616,7 +622,9 @@ export function SessionScreen({
                 frame={nativeGridPresentation.frame}
                 operationId={nativeGridPresentation.operationId}
                 agent={activePanel?.kind === 'claude' || activePanel?.kind === 'codex' || activePanel?.kind === 'shell'
-                  ? activePanel.kind : undefined}
+                  ? activePanel.kind
+                  // Kimi Code 的终端画面与普通终端同口径渲染（此前它就按 shell 上报）。
+                  : activePanel?.kind === 'kimi' ? 'shell' : undefined}
                 onMouse={onTerminalMouse}
                 onPaint={routeActive ? onTerminalPaint : undefined}
                 onViewport={routeActive && !keyboardVisible ? forwardTerminalResize : undefined}

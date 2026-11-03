@@ -138,7 +138,9 @@ import { TerminalTranscriptCache } from './src/terminal/terminalTranscriptCache'
 import { TerminalRecoveryCoordinator } from './src/terminal/terminalRecoveryCoordinator';
 import { TerminalPaintDeadline } from './src/terminal/terminalPaintDeadline';
 import { TerminalRendererRetry } from './src/terminal/terminalRendererRetry';
-import { TerminalPayloadRejectionPolicy } from './src/terminal/terminalPayloadRejection';
+import { pairedDeviceName } from './src/domain/deviceLabel';
+import { PanelRenameTransport } from './src/domain/panelRename';
+import { payloadRejectionTarget, TerminalPayloadRejectionPolicy } from './src/terminal/terminalPayloadRejection';
 import { TerminalSwapCoordinator } from './src/terminal/terminalSwapCoordinator';
 import {
   TerminalGridStore,
@@ -255,6 +257,7 @@ import {
   storeShotBrowserPanels,
   storeShotRoomMessages,
   storeShotSession,
+  storeShotCodexFrame,
   storeShotTerminalFrame,
 } from './src/fixtures/storeShotFixtures';
 
@@ -285,6 +288,7 @@ const NATIVE_GRID_DEMO_FRAME = NATIVE_GRID_DEMO_SEQUENCE?.[0] ?? (NATIVE_GRID_DE
 function storeShotRoute(): MobileRoute {
   switch (STORE_SHOT?.scene) {
     case 'terminal':
+    case 'codex':
       return { kind: 'session', workspaceCapability: STORE_SHOT_WORKSPACE, panelId: INITIAL.activePanelId! };
     case 'room':
       return { kind: 'session', workspaceCapability: STORE_SHOT_WORKSPACE, panelId: STORE_SHOT_ROOM };
@@ -663,6 +667,8 @@ export default function App(): React.ReactElement {
     operationId?: string;
   } | null>(STORE_SHOT?.scene === 'terminal'
     ? { frame: storeShotTerminalFrame(STORE_SHOT.locale) }
+    : STORE_SHOT?.scene === 'codex'
+      ? { frame: storeShotCodexFrame(STORE_SHOT.locale) }
     : NATIVE_GRID_DEMO ? { frame: NATIVE_GRID_DEMO_FRAME } : null);
   useEffect(() => {
     if (!NATIVE_GRID_DEMO_SEQUENCE) return;
@@ -1021,7 +1027,7 @@ export default function App(): React.ReactElement {
       performanceTrace.record(created.requestId, 'surface_create', 'failed', 'ambiguous');
       surfaceCreateOperation.advance(created.requestId, 'ambiguous');
       setSurfaceCreateError(t('创建后出现多个新窗口，结果无法唯一确认。'));
-      setBridgeError('创建后出现多个新窗口，结果无法唯一确认，请在 Mac 端核对。');
+      setBridgeError('创建后出现多个新窗口，结果无法唯一确认，请在电脑端核对。');
       return true;
     }
     const newPanel = candidates.find((panel) => panel.panelId === match.id)!;
@@ -1070,7 +1076,7 @@ export default function App(): React.ReactElement {
       performanceTrace.record(created.requestId, 'surface_create', 'failed', 'ambiguous');
       surfaceCreateOperation.advance(created.requestId, 'ambiguous');
       setSurfaceCreateError(t('创建后出现多个新协作房间，结果无法唯一确认。'));
-      setBridgeError('创建后出现多个新协作房间，结果无法唯一确认，请在 Mac 端核对。');
+      setBridgeError('创建后出现多个新协作房间，结果无法唯一确认，请在电脑端核对。');
       return true;
     }
     const room = candidates.find((candidate) => candidate.panelId === match.id)!;
@@ -1167,6 +1173,20 @@ export default function App(): React.ReactElement {
     }
   }
   const workspaceFileTransport = workspaceFileTransportRef.current;
+  // 手机给窗口改名（用户 2026-11-02）：只在电脑于 v3 回复里声明 panel-rename-v1 后开放。
+  const [panelRenameSupported, setPanelRenameSupported] = useState(false);
+  const panelRenameTransportRef = useRef<PanelRenameTransport | null>(null);
+  if (panelRenameTransportRef.current === null) {
+    panelRenameTransportRef.current = new PanelRenameTransport({
+      send: async (command) => {
+        const current = bridge.current;
+        if (current === null || !current.supportsPanelRename) throw new Error('panel rename unavailable');
+        await current.send(command);
+      },
+      requestId: createMobileRequestId,
+    });
+  }
+  const panelRenameTransport = panelRenameTransportRef.current;
   /** ADR-003 §14：只有桌面在探针 v2 中声明 workspace-files-v1 才出现文件入口。 */
   const [workspaceFilesSupported, setWorkspaceFilesSupported] = useState(STORE_SHOT !== null);
   /** 桌面确实回答了探针但没有文件能力：电脑上的 Connect 版本较旧，文件入口显示「更新后可用」。 */
@@ -1291,6 +1311,7 @@ export default function App(): React.ReactElement {
               createdRoomReconciler.stop();
               terminalImageTransfer.cancelForDisconnect();
               workspaceFileTransport.cancelForDisconnect();
+              panelRenameTransport.cancelForDisconnect();
               if (pendingRoomSendRef.current !== null) {
                 const pending = pendingRoomSendRef.current;
                 clearPendingRoomMessage(pending);
@@ -1349,6 +1370,7 @@ export default function App(): React.ReactElement {
             roomImageTransfer.cancelForDisconnect();
             terminalImageTransfer.cancelForDisconnect();
             workspaceFileTransport.cancelForDisconnect();
+            panelRenameTransport.cancelForDisconnect();
             terminalRecovery.releasePending();
             clearRefresh('failed');
             clearOwnershipConfirmTimer();
@@ -1438,7 +1460,7 @@ export default function App(): React.ReactElement {
           // subscription — the visible terminal would just stop. Payloads that
           // name no panel, or name one that is not the terminal on screen, are
           // recorded and dropped; a collaboration room is not a terminal at all.
-          const target = panelId ?? stateRef.current.activePanelId;
+          const target = payloadRejectionTarget({ panelId });
           if (target === null) return;
           const active = stateRef.current.panels.find(
             (panel) => panel.panelId === stateRef.current.activePanelId,
@@ -1475,6 +1497,7 @@ export default function App(): React.ReactElement {
           setWorkspaceFilesNeedDesktopUpdate(!capabilities.workspaceFiles && capabilities.answered);
         },
         onSurfaceOrder: (order) => setSurfaceOrder(order),
+        onPanelRenameSupport: (supported) => setPanelRenameSupported(supported),
         onEndpointChanged: (binding, endpoint) => {
           void profileStore.updateEndpoint(binding, endpoint);
         },
@@ -1483,6 +1506,7 @@ export default function App(): React.ReactElement {
         },
         onEvent: (event) => {
           if (workspaceFileTransport.handle(event)) return;
+          if (panelRenameTransport.handle(event)) return;
           // ── 网页镜像（ADR-003 §19）：列表/状态/暂停事件进域层 reducer ──
           if (
             event.kind === 'browserList'
@@ -1641,7 +1665,7 @@ export default function App(): React.ReactElement {
                 : event.code === 'room_capability_expired'
                     ? '协作房间状态已变化，请刷新后重试。'
                     : event.code === 'room_authorization_expired'
-                      ? '协作房间授权已失效，请在 Mac 重新授权后刷新。'
+                      ? '协作房间授权已失效，请在电脑上重新授权后刷新。'
                     : '协作消息发送失败，请检查权限后重试。',
             );
             return;
@@ -1670,7 +1694,7 @@ export default function App(): React.ReactElement {
                 : event.code === 'workspace_capability_expired'
                   ? '项目状态已变化，请刷新后重试。'
                   : event.category === 'ambiguous'
-                      ? '创建结果未能确认，请先在 Mac 端核对。'
+                      ? '创建结果未能确认，请先在电脑端核对。'
                       : '创建失败，请检查权限后重试。',
             );
           }
@@ -1697,7 +1721,7 @@ export default function App(): React.ReactElement {
                 : event.code === 'epoch_denied'
                     ? '窗口控制状态已变化，请刷新后重试。'
                     : event.category === 'ambiguous'
-                      ? '关闭结果未能确认，请先在 Mac 端核对。'
+                      ? '关闭结果未能确认，请先在电脑端核对。'
                       : '关闭失败，请检查权限后重试。',
             );
           }
@@ -1868,8 +1892,8 @@ export default function App(): React.ReactElement {
                     'retryable',
                   );
                   surfaceCreateOperation.advance(createdTerminal.requestId, 'failed');
-                  setSurfaceCreateError(t('窗口已在 Mac 创建，但手机未及时发现。'));
-                  setBridgeError('窗口已在 Mac 创建，但手机未及时发现，请刷新会话列表。');
+                  setSurfaceCreateError(t('窗口已在电脑上创建，但手机未及时发现。'));
+                  setBridgeError('窗口已在电脑上创建，但手机未及时发现，请刷新会话列表。');
                 },
               );
             } else {
@@ -1896,8 +1920,8 @@ export default function App(): React.ReactElement {
                     'retryable',
                   );
                   surfaceCreateOperation.advance(createdRoom.requestId, 'failed');
-                  setSurfaceCreateError(t('协作房间已在 Mac 创建，但手机未及时发现。'));
-                  setBridgeError('协作房间已在 Mac 创建，但手机未及时发现，请刷新会话列表。');
+                  setSurfaceCreateError(t('协作房间已在电脑上创建，但手机未及时发现。'));
+                  setBridgeError('协作房间已在电脑上创建，但手机未及时发现，请刷新会话列表。');
                 },
               );
             }
@@ -2394,6 +2418,7 @@ export default function App(): React.ReactElement {
         roomImageTransfer.cancelForDisconnect();
         terminalImageTransfer.cancelForDisconnect();
         workspaceFileTransport.cancelForDisconnect();
+        panelRenameTransport.cancelForDisconnect();
         clearRoomComposerImages();
         clearTerminalComposerImage();
         terminalPanelsRef.current = [];
@@ -2492,7 +2517,7 @@ export default function App(): React.ReactElement {
         }
         return;
       }
-      dispatch({ type: 'paired', deviceName: `Mac · ${stored.host}` });
+      dispatch({ type: 'paired', deviceName: pairedDeviceName(stored.host) });
       setDesktopKey(desktopKeyOf(stored));
       setRelayProfile(stored.relay ?? null);
       // Saved against another pairing: it can never be shown, so it is not kept.
@@ -2827,6 +2852,7 @@ export default function App(): React.ReactElement {
     roomImageTransfer.cancelForDisconnect();
     terminalImageTransfer.cancelForDisconnect();
     workspaceFileTransport.cancelForDisconnect();
+    panelRenameTransport.cancelForDisconnect();
     clearRoomComposerImages();
     clearTerminalComposerImage();
     if (pendingRoomSendRef.current !== null) {
@@ -2846,7 +2872,7 @@ export default function App(): React.ReactElement {
     setResumeTarget(null);
     void resumeStore.clear();
     commitRouteEvent({ type: 'reset' });
-    dispatch({ type: 'paired', deviceName: `Mac · ${next.host}` });
+    dispatch({ type: 'paired', deviceName: pairedDeviceName(next.host) });
     bridge.current?.connect(next);
   };
 
@@ -3303,6 +3329,8 @@ export default function App(): React.ReactElement {
     // 截图模式没有 Mac 来跟随手机改 PTY 形状，由夹具按本机报来的形状重排（STORE-SHOTS-SCREENSHOT-MODE-1020）。
     if (STORE_SHOT?.scene === 'terminal' && !transient) {
       setNativeGridPresentation({ frame: storeShotTerminalFrame(STORE_SHOT.locale, { cols, rows }) });
+    } else if (STORE_SHOT?.scene === 'codex' && !transient) {
+      setNativeGridPresentation({ frame: storeShotCodexFrame(STORE_SHOT.locale, { cols, rows }) });
     }
   }, [ptyGeometry]);
   useEffect(() => {
@@ -4065,6 +4093,10 @@ export default function App(): React.ReactElement {
   const routePanels = routeCatalogPresentation.snapshot?.panels ?? [];
   // —— IPAD-01：iPad 平板壳（同一份状态与处理函数，只换排版）——
   const windowSize = useWindowDimensions();
+  // 手机切换列表与 iPad 标签条共用（用户 2026-11-02）：电脑支持、在线、有写权限才给入口。
+  const renamePanel = panelRenameSupported && presentedConnection === 'online' && state.canControlInput
+    ? (panelId: string, title: string) => panelRenameTransport.rename(panelId, title)
+    : undefined;
   const tabletLayout = isTabletLayout(windowSize.width)
     && state.connection !== 'unpaired'
     && resumePreview === null;
@@ -4561,6 +4593,7 @@ export default function App(): React.ReactElement {
         }}
         onSurfaceCreateDismiss={dismissSurfaceCreate}
         onSurfaceCreate={createSurface}
+        onPanelRename={renamePanel}
         onSurfaceClose={(panelId, epoch) => {
           if (
             pendingSurfaceCloseRef.current !== null
@@ -4710,6 +4743,7 @@ export default function App(): React.ReactElement {
                         onOpenBrowser={openTabletBrowser}
                         webMirrorSupported={webMirrorOnline}
                         onRefresh={startRefresh}
+                        onRenameSession={renamePanel}
                         panels={state.panels}
                         presentedConnection={presentedConnection}
                         refreshStatus={refreshStatus}
@@ -4755,6 +4789,7 @@ export default function App(): React.ReactElement {
                             tab.workspaceCapability,
                           )}
                           onToggleSidebar={() => setTabletSidebarVisible((visible) => !visible)}
+                          onRenameSession={renamePanel}
                           sessions={tabletWorkspacePanels}
                           sidebarVisible={tabletSidebarVisible}
                           theme={theme}

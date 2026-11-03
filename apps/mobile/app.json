@@ -2,7 +2,7 @@
   "expo": {
     "name": "Connect",
     "slug": "connect-mobile",
-    "version": "1.0.19",
+    "version": "1.0.20",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "icon": "./assets/icon.png",
@@ -39,7 +39,7 @@
           "UIInterfaceOrientationLandscapeRight"
         ],
         "NSCameraUsageDescription": "允许 Connect 扫描电脑上的配对二维码。",
-        "NSLocalNetworkUsageDescription": "允许 Connect 连接局域网或 Tailscale 私网内已配对的 Mac。"
+        "NSLocalNetworkUsageDescription": "允许 Connect 连接局域网或 Tailscale 私网内已配对的电脑。"
       }
     },
     "android": {
@@ -53,7 +53,7 @@
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#16181d"
       },
-      "versionCode": 15,
+      "versionCode": 16,
       "allowBackup": false
     },
     "plugins": [

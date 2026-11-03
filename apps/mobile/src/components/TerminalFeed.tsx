@@ -19,6 +19,7 @@ const AGENT_LABELS: Record<AgentKind, string> = {
   claude: 'Claude',
   codex: 'Codex',
   shell: '终端',
+  kimi: 'Kimi Code',
 };
 
 export function TerminalFeed({

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { MobilePanelStatus } from '../../../../src/shared/types';
 import { PanelStatusLamp, lampTone, panelStatusLabel } from '../components/PanelStatusLamp';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ChevronRight, Folder, Plus, Settings } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type {
@@ -25,6 +25,7 @@ import { WorkspaceFilesPane } from '../components/files/WorkspaceFilesPane';
 import type { ConnectTheme } from '../theme/theme';
 import { MAX_COMPACT_FONT_SCALE, RADIUS, SPACE } from '../theme/tokens';
 import { t } from '../i18n';
+import { usePanelRenameDraft } from '../components/usePanelRenameDraft';
 
 export type TabletSidebarMode = 'projects' | 'files';
 
@@ -63,6 +64,7 @@ export function TabletSidebar({
   webMirrorSupported = false,
   activeBrowserCapability = null,
   onOpenBrowser,
+  onRenameSession,
 }: {
   /** The desktop's lamp per panel (MOBILE-SESSION-RUN-STATE-01). */
   panelStatuses?: Readonly<Record<string, MobilePanelStatus>>;
@@ -94,8 +96,11 @@ export function TabletSidebar({
   webMirrorSupported?: boolean;
   activeBrowserCapability?: string | null;
   onOpenBrowser?(browserCapability: string, title: string, workspaceCapability: string): void;
+  /** 给当前会话改名（用户 2026-11-02，与标签条同口径）；不能改时不传，长按无反应。空白恢复自动名称。 */
+  onRenameSession?(panelId: string, title: string): Promise<void>;
 }): React.ReactElement {
   const styles = createStyles(theme);
+  const rename = usePanelRenameDraft(activePanelId, onRenameSession);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const online = state.connection === 'online';
   const canWrite = online && state.canControlInput && !state.isDemo;
@@ -236,13 +241,55 @@ export function TabletSidebar({
                         && !settingsActive
                         && activeFileSubPath === null
                         && activeBrowserCapability === null;
+                      const renamable = selected && panel.kind !== 'collaboration' && onRenameSession !== undefined;
+                      const editing = selected && rename.editing?.panelId === panel.panelId ? rename.editing : null;
+                      if (editing !== null) {
+                        return (
+                          <View key={panel.panelId} style={[styles.sessionRow, styles.rowSelected]}>
+                            <KindIcon kind={panel.kind} size={17} theme={theme} />
+                            <View style={styles.renameCopy}>
+                              <TextInput
+                                accessibilityLabel={t('窗口名称')}
+                                autoFocus
+                                editable={!editing.busy}
+                                maxFontSizeMultiplier={MAX_COMPACT_FONT_SCALE}
+                                maxLength={120}
+                                onBlur={rename.cancel}
+                                onChangeText={rename.change}
+                                onSubmitEditing={rename.submit}
+                                placeholder={t('留空恢复自动名称')}
+                                placeholderTextColor={theme.colors.text3}
+                                returnKeyType="done"
+                                selectTextOnFocus
+                                style={styles.renameInput}
+                                submitBehavior="submit"
+                                testID="tablet-sidebar-rename-input"
+                                value={editing.draft}
+                              />
+                              {editing.error !== null ? (
+                                <Text maxFontSizeMultiplier={MAX_COMPACT_FONT_SCALE} numberOfLines={2} style={styles.renameError}>
+                                  {editing.error}
+                                </Text>
+                              ) : null}
+                            </View>
+                            {editing.busy ? <ActivityIndicator color={theme.colors.text2} size="small" /> : null}
+                          </View>
+                        );
+                      }
                       return (
                         <MotionPressable
+                          accessibilityActions={renamable ? [{ name: 'rename', label: t('重命名') }] : undefined}
                           accessibilityLabel={t('打开会话 {label}', { label: panelDisplayLabel(panel) })}
                           accessibilityRole="button"
                           accessibilityState={{ selected }}
                           feedback={selected ? undefined : 'selection'}
                           key={panel.panelId}
+                          onAccessibilityAction={renamable
+                            ? (event) => {
+                              if (event.nativeEvent.actionName === 'rename') rename.start(panel.panelId, panelDisplayLabel(panel));
+                            }
+                            : undefined}
+                          onLongPress={renamable ? () => rename.start(panel.panelId, panelDisplayLabel(panel)) : undefined}
                           onPress={() => onOpenSession(panel.panelId, workspace.workspaceCapability)}
                           style={[styles.sessionRow, selected ? styles.rowSelected : null, !online ? styles.dimmed : null]}
                         >
@@ -346,6 +393,9 @@ function createStyles(theme: ConnectTheme) {
     },
     rowSelected: { backgroundColor: theme.colors.panel2 },
     sessionLabel: { minWidth: 0, flex: 1, color: theme.colors.text, fontSize: 13 },
+    renameCopy: { minWidth: 0, flex: 1 },
+    renameInput: { paddingVertical: 4, color: theme.colors.text, fontSize: 13 },
+    renameError: { color: theme.colors.danger, fontSize: 12 },
     createLabel: { color: theme.colors.text3, fontSize: 13 },
     dimmed: { opacity: 0.5 },
     filesPane: { flex: 1 },

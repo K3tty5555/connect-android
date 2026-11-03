@@ -50,6 +50,7 @@ import { MAX_COMPACT_FONT_SCALE, RADIUS, SPACE } from '../theme/tokens';
 import { MotionPressable } from '../components/MotionPressable';
 import { SettingsSelect } from '../components/SettingsSelect';
 import { t } from '../i18n';
+import { deviceDisplayName } from '../domain/deviceLabel';
 import { useAndroidBack } from '../platform/useAndroidBack';
 import type { CrashDiagnostics } from '../crash/crashDiagnostics';
 import { CrashReportPreview } from './CrashReportPreview';
@@ -279,7 +280,7 @@ export function SettingsScreen({
         showsVerticalScrollIndicator={false}
       >
         <SettingsSection icon={Laptop} title={t('当前电脑')} theme={theme}>
-          <FactRow label={t('设备')} value={state.deviceName} theme={theme} />
+          <FactRow label={t('设备')} value={deviceDisplayName(state.deviceName)} theme={theme} />
           <FactRow
             label={t('连接')}
             value={t(CONNECTION_LABELS[presentedConnection])}

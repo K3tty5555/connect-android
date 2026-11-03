@@ -38,3 +38,15 @@ export class TerminalPayloadRejectionPolicy {
     this.counts.clear();
   }
 }
+
+/**
+ * Which terminal a rejected payload may re-synchronise. Only one that names a
+ * valid panel id — never "whatever terminal is on screen".
+ *
+ * 2026-11-02 regression: a malformed web-page ownership event (no valid panel
+ * id) fell back to the active terminal, re-attached it, and the desktop then
+ * handed the web page back — 「操作网页」looked dead and control bounced back.
+ */
+export function payloadRejectionTarget(report: { panelId: string | null }): string | null {
+  return report.panelId;
+}

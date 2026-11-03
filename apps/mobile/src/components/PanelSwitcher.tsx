@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { MobilePanelStatus } from '../../../../src/shared/types';
 import { PanelStatusLamp, lampTone, panelStatusLabel } from './PanelStatusLamp';
 import {
+  ActivityIndicator,
   Animated,
   Easing,
   StyleSheet,
@@ -14,11 +15,14 @@ import {
   type BottomSheetBackdropProps,
   BottomSheetFlatList,
   BottomSheetModal,
+  BottomSheetTextInput,
 } from '@gorhom/bottom-sheet';
 import {
+  Check,
   ChevronDown,
   ChevronLeft,
   Monitor,
+  Pencil,
   Plus,
   Smartphone,
   X,
@@ -42,6 +46,7 @@ import { KindIcon } from './KindIcon';
 import { panelDisplayLabel } from '../domain/panelLabel';
 import { MotionPressable } from './MotionPressable';
 import { OperationGlyph } from './OperationGlyph';
+import { usePanelRenameDraft } from './usePanelRenameDraft';
 import {
   ProgressiveRefreshButton,
   type RefreshStatus,
@@ -81,6 +86,11 @@ export interface PanelSwitcherProps {
   closingPanelIndex?: number;
   onCloseExitComplete?(): void;
   onCloseActiveSurface?(): void;
+  /**
+   * 给当前窗口改名（用户 2026-11-02）；空白恢复自动名称。只读、离线或电脑不支持时不传，入口就不出现。
+   * reject 时 Error.message 已是给用户看的说明。
+   */
+  onRenameActiveSurface?(title: string): Promise<void>;
   onBack?(): void;
   ownership?: OwnershipState | null;
   ownershipAuthority?: OwnershipAuthority;
@@ -196,6 +206,7 @@ export function PanelSwitcher({
   closingPanelIndex = -1,
   onCloseExitComplete = () => {},
   onCloseActiveSurface = () => {},
+  onRenameActiveSurface,
   onBack,
   ownership = null,
   ownershipAuthority = ownership === 'desktop_owned'
@@ -244,6 +255,12 @@ export function PanelSwitcher({
   const ownershipPhase: OperationPhase = ownershipPending
     ? 'pending'
     : ownershipAmbiguous ? 'ambiguous' : 'idle';
+  const rename = usePanelRenameDraft(
+    activePanelId,
+    onRenameActiveSurface === undefined ? undefined : (_panelId, title) => onRenameActiveSurface(title),
+  );
+  const renameTarget = rename.editing;
+  const submitRename = rename.submit;
   const closePresentation = operationPresentation(closeSurfaceStatus);
   const closeBlocked = !canCloseActiveSurface
     || closePresentation.busy
@@ -524,6 +541,32 @@ export function PanelSwitcher({
                     selected ? styles.panelRowSelected : null,
                   ]}
                 >
+                  {selected && renameTarget !== null ? (
+                    <View style={styles.panelSelector}>
+                      <KindIcon kind={panel.kind} size={20} theme={theme} />
+                      <View style={styles.panelCopy}>
+                        <BottomSheetTextInput
+                          accessibilityLabel={t('窗口名称')}
+                          autoFocus
+                          editable={!renameTarget.busy}
+                          maxFontSizeMultiplier={MAX_COMPACT_FONT_SCALE}
+                          maxLength={120}
+                          onChangeText={rename.change}
+                          onSubmitEditing={submitRename}
+                          placeholder={t('留空恢复自动名称')}
+                          placeholderTextColor={theme.colors.text3}
+                          returnKeyType="done"
+                          selectTextOnFocus
+                          style={styles.renameInput}
+                          testID="panel-rename-input"
+                          value={renameTarget.draft}
+                        />
+                        {renameTarget.error !== null ? (
+                          <Text numberOfLines={2} style={styles.renameError}>{renameTarget.error}</Text>
+                        ) : null}
+                      </View>
+                    </View>
+                  ) : (
                   <MotionPressable
                     accessibilityLabel={item.workspaceLabel
                       ? `${item.workspaceLabel}，${panelDisplayLabel(panel)}`
@@ -555,8 +598,46 @@ export function PanelSwitcher({
                       表达（VoiceOver 读的是后者），对勾纯属冗余装饰，故移除。
                     */}
                   </MotionPressable>
+                  )}
+                  {selected && panel.kind !== 'collaboration' && onRenameActiveSurface !== undefined ? (
+                    <View style={styles.panelCloseSlot}>
+                      {renameTarget === null ? (
+                        <MotionPressable
+                          accessibilityLabel={t('重命名 {label}', { label: panelDisplayLabel(panel) })}
+                          accessibilityRole="button"
+                          onPress={() => rename.start(panel.panelId, panelDisplayLabel(panel))}
+                          style={styles.panelCloseButton}
+                        >
+                          <Pencil color={theme.colors.text2} size={18} />
+                        </MotionPressable>
+                      ) : (
+                        <MotionPressable
+                          accessibilityLabel={t('确认重命名')}
+                          accessibilityRole="button"
+                          accessibilityState={{ busy: renameTarget.busy, disabled: renameTarget.busy }}
+                          disabled={renameTarget.busy}
+                          onPress={submitRename}
+                          style={styles.panelCloseButton}
+                        >
+                          {renameTarget.busy
+                            ? <ActivityIndicator color={theme.colors.text2} size="small" />
+                            : <Check color={theme.colors.accent} size={19} />}
+                        </MotionPressable>
+                      )}
+                    </View>
+                  ) : null}
                   <View style={styles.panelCloseSlot} testID="panel-close-slot">
-                    {selected && panel.kind !== 'collaboration' ? (
+                    {selected && renameTarget !== null ? (
+                      <MotionPressable
+                        accessibilityLabel={t('取消重命名')}
+                        accessibilityRole="button"
+                        disabled={renameTarget.busy}
+                        onPress={rename.cancel}
+                        style={styles.panelCloseButton}
+                      >
+                        <X color={theme.colors.text2} size={19} />
+                      </MotionPressable>
+                    ) : selected && panel.kind !== 'collaboration' ? (
                       <MotionPressable
                         accessibilityLabel={t('关闭窗口 {label}', { label: panelDisplayLabel(panel) })}
                         accessibilityRole="button"
@@ -758,6 +839,15 @@ function createStyles(theme: ConnectTheme) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    renameInput: {
+      minHeight: 36,
+      paddingHorizontal: SPACE.x2,
+      borderRadius: RADIUS.control,
+      backgroundColor: theme.colors.panel2,
+      color: theme.colors.text,
+      fontSize: 15,
+    },
+    renameError: { marginTop: 2, color: theme.colors.danger, fontSize: 12 },
     panelCloseSlot: {
       width: 44,
       height: 44,

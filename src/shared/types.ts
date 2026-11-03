@@ -946,7 +946,14 @@ export type MobileServerCapability =
    * （超出即整份 workspaceList 被丢弃，用户连项目都看不见）。**名额已满**：
    * 再加新能力前必须先解决旧手机的上限，见 tests/mobileBrowserSources.test.ts 的守卫。
    */
-  | 'ai-browser-v1';
+  | 'ai-browser-v1'
+  /**
+   * 手机可新建 Kimi Code（用户 2026-11-02）。**只出现在 v3 探针的回复里**：v2 回复名额已满 8，
+   * 旧手机从不发 v3，因此永远看不到第 9 个能力。
+   */
+  | 'surface-kimi-v1'
+  /** 手机可给当前窗口改名（用户 2026-11-02）；同样只出现在 v3 探针的回复里。 */
+  | 'panel-rename-v1';
 /** ADR-003 §17：桌面已绑定成功的直连监听；未监听（含 Relay-only）为 null。 */
 export interface MobileBridgeEndpoint {
   host: string;
@@ -964,6 +971,11 @@ export const MOBILE_CAPABILITY_PROBE_REQUEST_ID = 'req_capability_probe_v1';
  * 枚举解析 capabilities，多一个串就会丢弃整份工作区列表（ADR-003 §14）。
  */
 export const MOBILE_CAPABILITY_PROBE_V2_REQUEST_ID = 'req_capability_probe_v2';
+/**
+ * 第三代探针（2026-11-02）：v2 回复的能力表已到已发布手机的长度上限 8，再加会让旧手机丢弃整份工作区列表。
+ * 只有新手机发 v3，回复 = v2 全表 + v2 之后新增的能力；旧桌面把 v3 当普通请求、回复不带 capabilities。
+ */
+export const MOBILE_CAPABILITY_PROBE_V3_REQUEST_ID = 'req_capability_probe_v3';
 
 /** ADR-003 §14 工作区文件：Mac 右键菜单的写操作，经同一个 WorkspaceFs 执行。 */
 export type MobileFileMutation =
@@ -1037,7 +1049,8 @@ export type MobileCommand =
   | { kind: 'watchPanelStates'; requestId: string }
   | { kind: 'markPanelRead'; requestId: string; panelId: string }
   | { kind: 'endpointSync'; requestId: string }
-  | { kind: 'watchSurfaceOrder'; requestId: string }
+  /** `surfaceKinds` 声明手机认得的新类型（Kimi Code，用户 2026-11-02）；不带时桌面答复与以前一致。 */
+  | { kind: 'watchSurfaceOrder'; requestId: string; surfaceKinds?: Array<'kimi'> }
   | { kind: 'getCollaborationProfile'; requestId: string; workspaceCapability: string }
   | {
       kind: 'setCollaborationAvatar';
@@ -1052,6 +1065,8 @@ export type MobileCommand =
       surfaceKind: MobileSurfaceKind;
     }
   | { kind: 'closeSurface'; requestId: string; panelId: string; epoch: number }
+  /** 只改当前附着的终端窗口名；null 恢复自动名称（与电脑标签清空同口径）。 */
+  | { kind: 'renamePanel'; requestId: string; panelId: string; title: string | null }
   | {
       kind: 'attach';
       requestId?: string;
@@ -1302,6 +1317,7 @@ export type MobileEvent =
       surfaceKind: MobileSurfaceKind;
     }
   | { kind: 'surfaceCloseAccepted'; requestId: string; panelId: string }
+  | { kind: 'panelRenameAccepted'; requestId: string; panelId: string }
   /** ADR-003 §19：画面帧本体走二进制 WebSocket 帧（见 shared/mobileBrowserMirror.ts），不是 JSON 事件。 */
   | { kind: 'browserList'; requestId?: string; panels: MobileBrowserPanelSummary[] }
   | {
@@ -1485,7 +1501,8 @@ export type MobileEvent =
 
 export interface MobilePanelSummary {
   panelId: string;
-  kind: 'claude' | 'codex' | 'shell';
+  /** `kimi` 只发给声明认得它的连接，其余连接仍按 `shell` 上报。 */
+  kind: 'claude' | 'codex' | 'shell' | 'kimi';
   /** 可含工作区 basename 供用户辨认，但不得包含规范路径或父目录。 */
   label: string;
   workspaceCapability: string;
@@ -1522,7 +1539,7 @@ export interface MobileRoomMessage {
 
 export type MobileRoomImageMime = 'image/png' | 'image/jpeg';
 
-export type MobileSurfaceKind = 'claude' | 'codex' | 'shell' | 'collaboration';
+export type MobileSurfaceKind = 'claude' | 'codex' | 'shell' | 'collaboration' | 'kimi';
 
 export interface MobileWorkspaceSummary {
   workspaceCapability: string;
@@ -1605,6 +1622,15 @@ export interface MobileSurfaceCloseDispatch {
   requestId: string;
   workspacePath: string;
   panelId: string;
+}
+
+/** 手机改名过完全部闸门后发给权威 renderer 的本地请求；title 已按面板标题规则清洗，null 恢复自动。 */
+export interface MobilePanelRenameDispatch {
+  schemaVersion: 1;
+  requestId: string;
+  workspacePath: string;
+  panelId: string;
+  title: string | null;
 }
 
 export interface MobileSurfaceAck {

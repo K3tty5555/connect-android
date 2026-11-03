@@ -4,6 +4,7 @@ import { KindIcon } from './KindIcon';
 import type { ConnectTheme } from '../theme/theme';
 import { MAX_COMPACT_FONT_SCALE, RADIUS, SPACE } from '../theme/tokens';
 import { currentLanguage, t } from '../i18n';
+import { deviceDisplayName } from '../domain/deviceLabel';
 
 export interface ConnectionBarProps {
   deviceName: string;
@@ -41,12 +42,12 @@ export function ConnectionBar({
     <View style={styles.container}>
       <View
         accessible
-        accessibilityLabel={`${deviceName}${separator}${t(CONNECTION_LABELS[connection])}${isDemo ? `${separator}${t('演示')}` : ''}`}
+        accessibilityLabel={`${deviceDisplayName(deviceName)}${separator}${t(CONNECTION_LABELS[connection])}${isDemo ? `${separator}${t('演示')}` : ''}`}
         style={styles.summary}
       >
         <View style={styles.identity}>
           <KindIcon kind="shell" size={20} theme={theme} />
-          <Text maxFontSizeMultiplier={MAX_COMPACT_FONT_SCALE} numberOfLines={1} style={styles.deviceName}>{deviceName}</Text>
+          <Text maxFontSizeMultiplier={MAX_COMPACT_FONT_SCALE} numberOfLines={1} style={styles.deviceName}>{deviceDisplayName(deviceName)}</Text>
         </View>
         <View style={styles.statusGroup}>
           <Text maxFontSizeMultiplier={MAX_COMPACT_FONT_SCALE} style={[styles.status, { color: statusColor }]}>

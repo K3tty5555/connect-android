@@ -22,6 +22,7 @@ const AGENT_LABELS: Record<SessionViewModel['agent'], string> = {
   claude: 'Claude',
   codex: 'Codex',
   shell: '终端',
+  kimi: 'Kimi Code',
 };
 
 const PHASE_LABELS: Record<TaskPhase, string> = {

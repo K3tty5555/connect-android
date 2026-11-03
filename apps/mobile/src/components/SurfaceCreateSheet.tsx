@@ -53,10 +53,12 @@ const SURFACES: ReadonlyArray<{
   label: string;
   detail: string;
 }> = [
-  { kind: 'claude', iconKind: 'claude', label: 'Claude', detail: '使用 Mac 端启动配置' },
-  { kind: 'codex', iconKind: 'codex', label: 'Codex', detail: '使用 Mac 端启动配置' },
+  { kind: 'claude', iconKind: 'claude', label: 'Claude', detail: '使用电脑端启动配置' },
+  { kind: 'codex', iconKind: 'codex', label: 'Codex', detail: '使用电脑端启动配置' },
   { kind: 'shell', iconKind: 'shell', label: '终端', detail: '登录 Shell' },
   { kind: 'collaboration', iconKind: 'collaboration', label: '协作', detail: 'Claude 与 Codex' },
+  // 只在电脑列出时出现（见 orderedSurfaces）；启动命令同样取电脑端设置。
+  { kind: 'kimi', iconKind: 'kimi', label: 'Kimi Code', detail: '使用电脑端启动配置' },
 ];
 
 /** `static` falls back to the row's own description; the rest replace it. */

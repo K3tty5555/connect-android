@@ -1,4 +1,4 @@
-import { Claude, Codex } from '@lobehub/icons-rn';
+import { Claude, Codex, Kimi } from '@lobehub/icons-rn';
 import { Globe, MessagesSquare, SquareTerminal } from 'lucide-react-native';
 import { View } from 'react-native';
 import { STORE_SHOT } from '../storeShot';
@@ -39,6 +39,10 @@ export function KindIcon({
   }
   if (kind === 'codex') {
     return <Codex size={size} color={theme.colors.codex} />;
+  }
+  if (kind === 'kimi') {
+    // 与桌面 KindIcon 同口径：Kimi 官方单色图形 + 正文色（Kimi 没有身份色 token）。
+    return <Kimi size={size} color={theme.colors.text} />;
   }
   if (kind === 'collaboration') {
     return <MessagesSquare size={size} color={theme.colors.text2} />;

@@ -1,3 +1,4 @@
+import { pairedDeviceName } from '../domain/deviceLabel';
 import type { TerminalGridRow, TerminalGridStyle } from '../../../../src/shared/types';
 import type { SessionViewModel } from '../domain/session';
 import type { MobileRoomMessage } from '../net/bridgeClient';
@@ -29,9 +30,10 @@ const COPY: Record<StoreShotLocale, { room: string }> = {
 
 export function storeShotSession(shot: Pick<StoreShot, 'scene' | 'locale'>): SessionViewModel {
   const copy = COPY[shot.locale];
-  const activePanelId = shot.scene === 'room' ? ROOM_PANEL : CLAUDE_PANEL;
+  const activePanelId = shot.scene === 'room' ? ROOM_PANEL : shot.scene === 'codex' ? CODEX_PANEL : CLAUDE_PANEL;
   return {
-    deviceName: 'Mac · 100.101.7.42',
+    // 与真实 App 同一构造（电脑端有 Mac 也有 Windows，2026-11-02）；显示时按截图语言翻译。
+    deviceName: pairedDeviceName('100.101.7.42'),
     connection: 'online',
     ownership: 'mobile_owned',
     ownershipAuthority: 'mobile_owned',
@@ -135,6 +137,7 @@ const STYLES = {
   gb: { ...plain, bold: true, foreground: { kind: 'palette', index: 2 } },
   o: { ...plain, foreground: { kind: 'rgb', value: 0xd77757 } },
   m: { ...plain, foreground: { kind: 'palette', index: 5 } },
+  r: { ...plain, foreground: { kind: 'palette', index: 1 } },
 } satisfies Record<string, TerminalGridStyle>;
 type StyleKey = keyof typeof STYLES;
 type Line = Array<[string, StyleKey?]> | string;
@@ -173,6 +176,96 @@ function tool(name: string, argument: string): Line {
 function result(text: string, style: StyleKey = 'd'): Line {
   return [['  ⎿  ', 'd'], [text, style]];
 }
+
+/**
+ * 当前这轮之前的一段对话（2026-11-02）：跑了一阵的真实会话是满屏的。手机上它落在回滚区看不见，
+ * iPad 一屏约 71 行，没有它终端只占下半截（商店截图第 1 张）。
+ */
+function earlier(copy: {
+  ask: string; look: string; plan: [string, string]; lintOk: string; done: [string, string];
+  groups: string; tz: string; emptyAsk: string; emptyDone: string;
+}): Line[] {
+  return [
+    [['> ', 'd'], [copy.ask, 'd']],
+    '',
+    [['⏺ '], [copy.look]],
+    '',
+    tool('Read', 'src/pages/TripList.tsx'),
+    result('Read 96 lines'),
+    '',
+    tool('Read', 'src/lib/itinerary.ts'),
+    result('Read 58 lines'),
+    '',
+    [['⏺ '], [copy.plan[0]]],
+    `  ${copy.plan[1]}`,
+    '',
+    tool('Update', 'src/lib/itinerary.ts'),
+    result('Updated with 21 additions, 2 removals'),
+    '',
+    tool('Update', 'src/pages/TripList.tsx'),
+    result('Updated with 14 additions, 9 removals'),
+    '',
+    tool('Bash', 'npm test -- itinerary'),
+    [['  ⎿  ', 'd'], [' PASS ', 'gb'], [' itinerary.test.ts']],
+    [['     ✓ ', 'g'], [copy.groups], [' (6 ms)', 'd']],
+    [['     ✓ ', 'g'], [copy.tz], [' (3 ms)', 'd']],
+    [['     Tests: '], ['8 passed', 'g'], [', 8 total']],
+    '',
+    tool('Bash', 'npm run lint'),
+    result(copy.lintOk),
+    '',
+    [['⏺ '], [copy.done[0]]],
+    `  ${copy.done[1]}`,
+    '',
+    [['> ', 'd'], [copy.emptyAsk, 'd']],
+    '',
+    tool('Update', 'src/pages/TripList.tsx'),
+    result('Updated with 6 additions'),
+    '',
+    tool('Bash', 'npm test -- TripList'),
+    [['  ⎿  ', 'd'], [' PASS ', 'gb'], [' TripList.test.tsx']],
+    [['     Tests: '], ['5 passed', 'g'], [', 5 total']],
+    '',
+    [['⏺ '], [copy.emptyDone]],
+    '',
+  ];
+}
+
+const EARLIER: Record<StoreShotLocale, Line[]> = {
+  'zh-Hans': earlier({
+    ask: '行程列表按日期分组显示',
+    look: '先看看列表现在怎么渲染的。',
+    plan: ['列表是平铺的，我加一个按天分组的函数，', '列表按组渲染，每组带日期标题。'],
+    groups: '按天分组',
+    tz: '跨时区仍归到当地日期',
+    lintOk: 'No problems found',
+    done: ['列表已按日期分组，每天一个标题，', '8 项测试和 lint 都通过了。'],
+    emptyAsk: '空的日期也显示一行「当天暂无安排」',
+    emptyDone: '加好了，空的日期显示「当天暂无安排」。',
+  }),
+  'zh-Hant': earlier({
+    ask: '行程列表按日期分組顯示',
+    look: '先看看列表現在怎麼渲染的。',
+    plan: ['列表是平鋪的，我加一個按天分組的函式，', '列表按組渲染，每組帶日期標題。'],
+    groups: '按天分組',
+    tz: '跨時區仍歸到當地日期',
+    lintOk: 'No problems found',
+    done: ['列表已按日期分組，每天一個標題，', '8 項測試和 lint 都通過了。'],
+    emptyAsk: '空的日期也顯示一行「當天暫無安排」',
+    emptyDone: '加好了，空的日期顯示「當天暫無安排」。',
+  }),
+  en: earlier({
+    ask: 'Group the trip list by day',
+    look: 'Let me see how the list renders today.',
+    plan: ['The list is flat. I\'ll add a group-by-day', 'helper and render each day under a header.'],
+    groups: 'groups items by day',
+    tz: 'keeps local dates across zones',
+    lintOk: 'No problems found',
+    done: ['The list is grouped by day with a header', 'for each. Tests and lint pass.'],
+    emptyAsk: 'Show "Nothing planned" on empty days',
+    emptyDone: 'Done. Empty days now say "Nothing planned".',
+  }),
+};
 
 const TERMINAL: Record<StoreShotLocale, { history: Line[]; working: string; prompt: string }> = {
   'zh-Hans': {
@@ -310,7 +403,7 @@ export function storeShotTerminalFrame(
     [['  ⏵⏵ accept edits on', 'm'], [' (shift+tab to cycle)', 'd']],
   ];
   const rows = Math.max(viewport.length, Math.min(200, Math.floor(fit?.rows ?? 0)));
-  const transcript = [...copy.history, ...viewport].map(toRow);
+  const transcript = [...EARLIER[locale], ...copy.history, ...viewport].map(toRow);
   const blank = (): TerminalGridRow => ({ wrapped: false, spans: [] });
   const padded = [...Array.from({ length: Math.max(0, rows - transcript.length) }, blank), ...transcript];
   return {
@@ -324,5 +417,162 @@ export function storeShotTerminalFrame(
     historyRows: padded.slice(0, padded.length - rows),
     viewportRows: padded.slice(padded.length - rows),
     cursor: { row: rows - viewport.length + 3, column: 2, visible: true },
+  };
+}
+
+// ── Codex：iPad 第 2 张（所有会话 一个列表）主区打开的会话（2026-11-02）──
+// 审查同一个 feat/date-range 分支，与协作群截图讲的是同一件事。样式仿 Codex 终端（› 输入、• 步骤）。
+
+interface CodexCopy {
+  switchAsk: string; switched: string; ask: string; look: string; plan: [string, string]; edge: [string, string]; naming: [string, string];
+  fixAsk: string; testName: string; fixed: [string, string]; allAsk: string; final: [string, string];
+}
+
+function codexTranscript(copy: CodexCopy): Line[] {
+  return [
+    [['› ', 'd'], [copy.switchAsk, 'd']],
+    '',
+    [['• '], ['Ran ', 'b'], ['git fetch origin']],
+    [['  └ ', 'd'], ['Already up to date.', 'd']],
+    '',
+    [['• '], ['Ran ', 'b'], ['git switch feat/date-range']],
+    [['  └ ', 'd'], ["Switched to branch 'feat/date-range'", 'd']],
+    '',
+    [['• '], [copy.switched]],
+    '',
+    [['› ', 'd'], [copy.ask, 'd']],
+    '',
+    [['• '], [copy.look]],
+    '',
+    [['• '], ['Explored', 'b']],
+    [['  └ ', 'd'], ['Read DatePicker.tsx']],
+    '    Read dateRange.ts',
+    '    Read DateSheet.tsx',
+    '    Read dateRange.test.ts',
+    '',
+    [['• '], ['Ran ', 'b'], ['git diff --stat main']],
+    [['  └ ', 'd'], ['DatePicker.tsx | 24 ', 'd'], ['++++++', 'g'], ['--', 'r']],
+    [['    '], ['dateRange.ts   | 15 ', 'd'], ['++++', 'g'], ['-', 'r']],
+    [['    '], ['DateSheet.tsx  | 12 ', 'd'], ['+++', 'g'], ['-', 'r']],
+    '',
+    [['• '], ['Ran ', 'b'], ['npm run typecheck']],
+    [['  └ ', 'd'], ['No errors', 'd']],
+    '',
+    [['• '], [copy.plan[0]]],
+    `  ${copy.plan[1]}`,
+    '',
+    [['  1. '], [copy.edge[0]]],
+    `     ${copy.edge[1]}`,
+    [['  2. '], [copy.naming[0]]],
+    `     ${copy.naming[1]}`,
+    '',
+    [['› ', 'd'], [copy.fixAsk, 'd']],
+    '',
+    [['• '], ['Edited ', 'b'], ['src/lib/dateRange.ts ('], ['+4', 'g'], [' '], ['-1', 'r'], [')']],
+    [['    6 ', 'd'], ['  export function daysIn(range) {']],
+    [['    7 ', 'd'], ['-   if (end < start) return [];', 'r']],
+    [['    7 ', 'd'], ['+   if (range.end < range.start) {', 'g']],
+    [['    8 ', 'd'], ["+    throw new RangeError('bad range');", 'g']],
+    [['    9 ', 'd'], ['+   }', 'g']],
+    '',
+    [['• '], ['Edited ', 'b'], ['src/lib/dateRange.test.ts ('], ['+9', 'g'], [')']],
+    '',
+    [['• '], ['Ran ', 'b'], ['npm test -- dateRange']],
+    [['  └ ', 'd'], [' PASS ', 'gb'], [' dateRange.test.ts']],
+    [['    '], ['✓ ', 'g'], [copy.testName], [' (2 ms)', 'd']],
+    [['    Tests: '], ['9 passed', 'g'], [', 9 total']],
+    '',
+    [['• '], [copy.fixed[0]]],
+    `  ${copy.fixed[1]}`,
+    '',
+    [['› ', 'd'], [copy.allAsk, 'd']],
+    '',
+    [['• '], ['Ran ', 'b'], ['npm test']],
+    [['  └ ', 'd'], ['Test Suites: '], ['24 passed', 'g'], [', 24 total']],
+    [['    Tests:       '], ['186 passed', 'g'], [', 186 total']],
+    [['    Time:        3.82 s', 'd']],
+    '',
+    [['• '], ['Ran ', 'b'], ['git log --oneline -3']],
+    [['  └ ', 'd'], ['a41c9e2 ', 'o'], ['fix: reject end before start']],
+    [['    '], ['7d03b51 ', 'o'], ['feat: mobile date sheet ranges']],
+    [['    '], ['c88f2a0 ', 'o'], ['feat: month paging in picker']],
+    '',
+    [['• '], [copy.final[0]]],
+    `  ${copy.final[1]}`,
+    '',
+  ];
+}
+
+const CODEX: Record<StoreShotLocale, Line[]> = {
+  'zh-Hans': codexTranscript({
+    switchAsk: '切到 feat/date-range 分支',
+    switched: '已切换，这个分支比 main 多 3 个提交。',
+    ask: '审一下 feat/date-range 分支的改动',
+    look: '我先看看这个分支改了哪些文件。',
+    plan: ['跨月翻页和区间选择的逻辑是对的，测试也', '覆盖了主要路径。有两处值得改：'],
+    edge: ['结束早于开始时 daysIn 会静默返回空数组，', '界面上没有任何提示。'],
+    naming: ['DateSheet 的 range 含义和 picker 不同，', '建议改个名，避免混淆。'],
+    fixAsk: '先修第一处，再补一条测试',
+    testName: '结束早于开始时报错',
+    fixed: ['补好了：结束早于开始会抛出错误，界面层', '已有的提示会接住它。'],
+    allAsk: '全量测试跑一遍',
+    final: ['全部通过，这个分支可以合并。改名那处', '不影响行为，可以下次一起改。'],
+  }),
+  'zh-Hant': codexTranscript({
+    switchAsk: '切到 feat/date-range 分支',
+    switched: '已切換，這個分支比 main 多 3 個提交。',
+    ask: '審一下 feat/date-range 分支的改動',
+    look: '我先看看這個分支改了哪些檔案。',
+    plan: ['跨月翻頁和區間選擇的邏輯是對的，測試也', '覆蓋了主要路徑。有兩處值得改：'],
+    edge: ['結束早於開始時 daysIn 會靜默回傳空陣列，', '介面上沒有任何提示。'],
+    naming: ['DateSheet 的 range 含義和 picker 不同，', '建議改個名，避免混淆。'],
+    fixAsk: '先修第一處，再補一條測試',
+    testName: '結束早於開始時報錯',
+    fixed: ['補好了：結束早於開始會拋出錯誤，介面層', '已有的提示會接住它。'],
+    allAsk: '全量測試跑一遍',
+    final: ['全部通過，這個分支可以合併。改名那處', '不影響行為，可以下次一起改。'],
+  }),
+  en: codexTranscript({
+    switchAsk: 'Switch to the feat/date-range branch',
+    switched: 'On feat/date-range, 3 commits ahead of main.',
+    ask: 'Review the feat/date-range branch',
+    look: 'Let me see which files this branch touches.',
+    plan: ['Month paging and range selection are right,', 'and tests cover the main paths. Two notes:'],
+    edge: ['daysIn returns [] if the end is before', 'the start, with no warning in the UI.'],
+    naming: ['`range` in DateSheet means something else', 'than in the picker; consider renaming it.'],
+    fixAsk: 'Fix the first one and add a test',
+    testName: 'throws when end is before start',
+    fixed: ['Fixed: an end before the start now throws,', 'and the existing UI error catches it.'],
+    allAsk: 'Run the full test suite',
+    final: ['All green. The branch is ready to merge;', 'the rename can wait for a follow-up.'],
+  }),
+};
+
+/** 与 `storeShotTerminalFrame` 同口径：按设备报来的形状铺满，最新内容在屏幕底部。 */
+export function storeShotCodexFrame(
+  locale: StoreShotLocale,
+  fit?: { cols: number; rows: number },
+): NativeTerminalGridState {
+  const viewport: Line[] = [
+    [['› ', 'd'], ['Ask Codex to do anything', 'd']],
+    '',
+    [['  98% context left · ? for shortcuts', 'd']],
+  ];
+  const rows = Math.max(viewport.length, Math.min(200, Math.floor(fit?.rows ?? 0)));
+  const transcript = [...CODEX[locale], ...viewport].map(toRow);
+  const blank = (): TerminalGridRow => ({ wrapped: false, spans: [] });
+  const padded = [...Array.from({ length: Math.max(0, rows - transcript.length) }, blank), ...transcript];
+  return {
+    panelId: CODEX_PANEL,
+    revision: 1,
+    upperSeq: 1,
+    cols: Math.max(COLS, Math.min(500, Math.floor(fit?.cols ?? 0))),
+    rows,
+    screen: 'normal',
+    omittedLines: 0,
+    historyRows: padded.slice(0, padded.length - rows),
+    viewportRows: padded.slice(padded.length - rows),
+    // 光标压在占位文字「Ask…」的首字母上像是坏了：截图里不画光标。
+    cursor: { row: rows - viewport.length, column: 2, visible: false },
   };
 }
